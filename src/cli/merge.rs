@@ -1,5 +1,5 @@
 use crate::config::{
-    action::Action, arg::ArgStyle, duration::Duration, rule::Rule, subcommand::Subcommand, Config,
+    Config, action::Action, arg::ArgStyle, duration::Duration, rule::Rule, subcommand::Subcommand,
 };
 use crate::errors::GuardError;
 
@@ -334,6 +334,137 @@ flags = ["--since", "--full"]
         assert!(rule.flags.is_empty());
         assert!(rule.subcommands.is_empty());
         assert!(rule.args.is_empty());
+    }
+
+    /// Flags after subcommand name → consumed at subcommand level.
+    /// Covers walk_and_merge "another flag at subcommand level" branch (L369-371).
+    #[test]
+    fn test_walk_and_merge_flag_after_subcommand() {
+        let (_dir, path) = minimal_config();
+        // "sshd" gets consumed as --full's value, then --another-flag starts a new flag
+        add_rule(&path, "systemctl status --full sshd --another-flag").unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        let rule = find_rule(&config.rules, "systemctl").unwrap();
+
+        assert_eq!(rule.subcommands.len(), 1);
+        assert_eq!(rule.subcommands[0].name, "status");
+        assert!(rule.subcommands[0].flags.contains(&"--full".to_string()));
+        assert!(
+            rule.subcommands[0]
+                .flags
+                .contains(&"--another-flag".to_string())
+        );
+        // "sshd" consumed as value for --full, so no positional args
+        assert!(rule.subcommands[0].args.is_empty());
+    }
+
+    /// 2 existing rules for same binary + add_rule with that binary →
+    /// matching_indices.len() == 2 < 3 → early return.
+    /// Covers auto_create_flag_groups < 3 check (L479-483).
+    #[test]
+    fn test_auto_create_flag_groups_less_than_3_rules() {
+        let (_dir, path) = create_config(
+            r#"
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--no-pager"]
+
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["-n"]
+"#,
+        );
+        add_rule(&path, "journalctl --since yesterday").unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        assert!(config.flag_groups.is_empty());
+    }
+
+    /// 3+ rules for same binary but 0 common flags →
+    /// common.len() == 0 < 2 → early return.
+    /// Covers auto_create_flag_groups common.len() < 2 check (L501).
+    #[test]
+    fn test_auto_create_flag_groups_zero_common_flags() {
+        let (_dir, path) = create_config(
+            r#"
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--no-pager"]
+
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["-n"]
+
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--full"]
+"#,
+        );
+        add_rule(&path, "journalctl --since yesterday").unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        assert!(config.flag_groups.is_empty());
+    }
+
+    /// 3+ rules with subcommands that share >= 2 common flags →
+    /// flag_groups assigned to subcommands too.
+    /// Covers the sub.flag_groups.push branch in auto_create_flag_groups (L514-517).
+    #[test]
+    fn test_auto_create_flag_groups_with_subcommands() {
+        let (_dir, path) = create_config(
+            r#"
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--no-pager", "--since"]
+
+[[rules.subcommands]]
+name = "list"
+flags = ["--no-pager"]
+
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--no-pager", "--since", "-n"]
+
+[[rules.subcommands]]
+name = "show"
+flags = ["--no-pager"]
+
+[[rules]]
+action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+flags = ["--no-pager", "--since", "--full"]
+
+[[rules.subcommands]]
+name = "verify"
+flags = ["--no-pager"]
+"#,
+        );
+        add_rule(&path, "journalctl --since yesterday --no-pager").unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+
+        let group = config.flag_groups.get("journalctl-common-flags");
+        assert!(group.is_some(), "expected flag group to be created");
+        let group = group.unwrap();
+        assert!(group.contains(&"--no-pager".to_string()));
+        assert!(group.contains(&"--since".to_string()));
+
+        for rule in &config.rules {
+            if let Action::Run { binary, .. } = &rule.action {
+                if binary.ends_with("/journalctl") {
+                    for sub in &rule.subcommands {
+                        assert!(
+                            sub.flag_groups
+                                .contains(&"journalctl-common-flags".to_string()),
+                            "subcommand '{}' should have the common flag group",
+                            sub.name
+                        );
+                    }
+                    // Common flags removed from rule-level flags
+                    assert!(!rule.flags.contains(&"--no-pager".to_string()));
+                }
+            }
+        }
     }
 }
 

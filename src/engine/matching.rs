@@ -1127,4 +1127,276 @@ mod tests {
             other => panic!("expected NoMatch, got {other:?}"),
         }
     }
+
+    // --- Rule with no command_name (command=None, non-Run action) ---
+
+    #[test]
+    fn test_rule_no_command() {
+        let mut cfg = make_config();
+        // Rule with command=None and a subcommand — command_name() returns None,
+        // so the command-name check is skipped (covers the None branch at match L73).
+        // argv[0] matches the subcommand name.
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: None,
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![Subcommand {
+                name: "any-tool".into(),
+                arg_style: None,
+                flag_groups: vec![],
+                flags: vec![],
+                args: vec![],
+                pre_args: vec![],
+                subcommands: vec![],
+            }],
+        });
+        let argv = vec!["any-tool".into()];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.rule_index, 2);
+        assert_eq!(result.subcommand_path, vec!["any-tool"]);
+    }
+
+    // --- No subcommand / arg after flags consumed ---
+
+    #[test]
+    fn test_no_args_after_command_with_subcommands() {
+        // Rule has subcommands but argv is just the command name
+        let cfg = make_config();
+        let argv = vec!["git".into()];
+        let err = match_command(&cfg, &argv).unwrap_err();
+        match err {
+            GuardError::NoMatch { failures, .. } => {
+                assert!(
+                    failures
+                        .iter()
+                        .any(|f| f.reason == "no arguments after command")
+                );
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_arguments_no_subcommands_no_args() {
+        // Rule has no subcommands and no args -- extra tokens are unexpected
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("simple".into()),
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        let argv = vec!["simple".into(), "extra".into()];
+        let err = match_command(&cfg, &argv).unwrap_err();
+        match err {
+            GuardError::NoMatch { failures, .. } => {
+                assert!(failures.iter().any(|f| f.reason.contains("unexpected")));
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    // --- Dos style inline flag consumption in consume_flags ---
+
+    #[test]
+    fn test_consume_flags_dos_inline() {
+        let mut cfg = make_config();
+        // Dos-style inline flag consumption: /flag:value uses ':' as separator.
+        // Flag must be at the level where consume_flags runs — here, as a top-level
+        // flag before the subcommand. This covers the inline consumption in consume_flags (L153-154).
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("dos-tool".into()),
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::Dos,
+            flag_groups: vec![],
+            flags: vec!["/verbose".into()],
+            subcommands: vec![Subcommand {
+                name: "run".into(),
+                arg_style: None,
+                flag_groups: vec![],
+                flags: vec![],
+                args: vec!["{string}".into()],
+                pre_args: vec![],
+                subcommands: vec![],
+            }],
+        });
+        // /verbose:true before subcommand — consumed at top-level by consume_flags
+        let argv = vec![
+            "dos-tool".into(),
+            "/verbose:true".into(),
+            "run".into(),
+            "data".into(),
+        ];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.captures.get("arg_0").unwrap(), "data");
+    }
+
+    // --- walk_subcommands: token doesn't match any subcommand ---
+
+    #[test]
+    fn test_walk_subcommands_token_not_found() {
+        let cfg = make_config();
+        // "git bogus" — "bogus" is not a subcommand of git
+        let argv = vec!["git".into(), "bogus".into()];
+        let err = match_command(&cfg, &argv).unwrap_err();
+        match err {
+            GuardError::NoMatch { failures, .. } => {
+                assert!(failures.iter().any(|f| f.reason == "unknown subcommand"));
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    // --- walk_subcommands_nested: matched nested subcommand with remaining args ---
+
+    #[test]
+    fn test_walk_subcommands_nested_with_args() {
+        // Tests walk_subcommands_nested matching a nested subcommand and then
+        // dispatching to match_remaining_args. Covers the deeper nesting path
+        // in walk_subcommands_nested (L240-258).
+        // "git remote add my-remote" — remote->add is a nested subcommand with args [{string}]
+        let cfg = make_config();
+        let argv = vec![
+            "git".into(),
+            "remote".into(),
+            "add".into(),
+            "my-remote".into(),
+        ];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.rule_index, 0);
+        assert_eq!(result.subcommand_path, vec!["remote", "add"]);
+        assert_eq!(result.captures.get("arg_0").unwrap(), "my-remote");
+    }
+
+    // --- InlineFlag with Dos style separator in match_remaining_args_inner ---
+
+    #[test]
+    fn test_inline_flag_dos_separator_in_args() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("dos-args".into()),
+            args: vec!["/level:{int}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::Dos,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        let argv = vec!["dos-args".into(), "/level:5".into()];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.captures.get("arg_0").unwrap(), "5");
+    }
+
+    // --- TemplateContext: empty capture (base_start >= base_end) ---
+
+    #[test]
+    fn test_template_context_empty_capture() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("t-empty".into()),
+            // Pattern prefix="--", suffix=None
+            args: vec!["--{int}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        // "--" gives base_start=2, base_end=2 → 2 < 2 → false, no capture
+        let argv = vec!["t-empty".into(), "--".into()];
+        let err = match_command(&cfg, &argv).unwrap_err();
+        match err {
+            GuardError::NoMatch { failures, .. } => {
+                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    // --- TemplateContext: prefix matches but suffix doesn't ---
+
+    #[test]
+    fn test_template_context_suffix_mismatch() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("t-suffix".into()),
+            args: vec!["--{string}.service".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        // prefix="--" matches, suffix=".service" doesn't match "--foo.bad"
+        let argv = vec!["t-suffix".into(), "--foo.bad".into()];
+        let err = match_command(&cfg, &argv).unwrap_err();
+        match err {
+            GuardError::NoMatch { failures, .. } => {
+                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
+            }
+            other => panic!("expected NoMatch, got {other:?}"),
+        }
+    }
+
+    // --- Rule-level args (no subcommands) ---
+
+    #[test]
+    fn test_rule_level_args_no_subcommands() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("direct".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        let argv = vec!["direct".into(), "value".into()];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.captures.get("arg_0").unwrap(), "value");
+    }
+
+    // --- Dos-style InlineFlag in match_remaining_args_inner ---
+
+    #[test]
+    fn test_inline_flag_dos_colon_separator() {
+        // Covers the ':' separator branch in InlineFlag match (Dos style)
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("dos-inline".into()),
+            args: vec!["/depth:{int}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::Dos,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        });
+        let argv = vec!["dos-inline".into(), "/depth:10".into()];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.captures.get("arg_0").unwrap(), "10");
+    }
 }

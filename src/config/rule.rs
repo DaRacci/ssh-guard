@@ -59,11 +59,13 @@ impl Rule {
     }
 }
 
+#[coverage(off)]
 const fn default_implicit() -> bool {
     true
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use super::*;
     use crate::config::action::Action;

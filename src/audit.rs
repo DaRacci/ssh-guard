@@ -94,7 +94,7 @@ impl AuditEvent {
 }
 
 /// Get current time as ISO 8601 string (no external crate — manual formatting).
-fn chrono_now() -> String {
+pub(crate) fn chrono_now() -> String {
     // Use UNIX epoch + format manually to avoid chrono dependency.
     // Format: "2025-01-15T10:30:00Z"
     let dur = std::time::SystemTime::now()
@@ -106,7 +106,7 @@ fn chrono_now() -> String {
     format_unix_time(secs)
 }
 
-fn format_unix_time(secs: u64) -> String {
+pub(crate) fn format_unix_time(secs: u64) -> String {
     // Days since epoch
     let days = secs / 86400;
     let time_of_day = secs % 86400;
@@ -150,7 +150,7 @@ fn format_unix_time(secs: u64) -> String {
     )
 }
 
-fn is_leap(y: i64) -> bool {
+pub(crate) fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
@@ -197,5 +197,188 @@ mod tests {
         assert!(ts.contains("T"));
         assert!(ts.ends_with("Z"));
         assert_eq!(ts.len(), 20); // "YYYY-MM-DDTHH:MM:SSZ"
+    }
+
+    // ── format_unix_time ────────────────────────────────────────────
+
+    #[test]
+    fn test_format_unix_time_epoch() {
+        assert_eq!(format_unix_time(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_one_day() {
+        assert_eq!(format_unix_time(86400), "1970-01-02T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_one_hour() {
+        assert_eq!(format_unix_time(3600), "1970-01-01T01:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_leap_year_2000() {
+        // 951782400 = 2000-02-29T00:00:00Z (leap year, Feb has 29 days)
+        assert_eq!(format_unix_time(951782400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_non_leap_feb() {
+        // 2001-03-01T00:00:00Z = 983404800 (non-leap, Feb has 28 days)
+        assert_eq!(format_unix_time(983404800), "2001-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_midnight_boundary() {
+        // Exactly one year after epoch: 1971-01-01T00:00:00Z
+        let secs = 365 * 86400; // 1970 is not a leap year
+        assert_eq!(format_unix_time(secs), "1971-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_leap_march_1() {
+        // Day after Feb 29 in leap year 2000: 2000-03-01T00:00:00Z
+        assert_eq!(format_unix_time(951868800), "2000-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_format_unix_time_one_day_before_leap_feb_29() {
+        // 951696000 = 2000-02-28T00:00:00Z (day before Feb 29 in leap year)
+        assert_eq!(format_unix_time(951696000), "2000-02-28T00:00:00Z");
+    }
+
+    // ── is_leap ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_leap_2000() {
+        assert!(is_leap(2000));
+    }
+
+    #[test]
+    fn test_is_leap_2004() {
+        assert!(is_leap(2004));
+    }
+
+    #[test]
+    fn test_is_leap_1900() {
+        assert!(!is_leap(1900));
+    }
+
+    #[test]
+    fn test_is_leap_2001() {
+        assert!(!is_leap(2001));
+    }
+
+    #[test]
+    fn test_is_leap_2020() {
+        assert!(is_leap(2020));
+    }
+
+    #[test]
+    fn test_is_leap_2023() {
+        assert!(!is_leap(2023));
+    }
+
+    #[test]
+    fn test_is_leap_2400() {
+        // Divisible by 400 → leap
+        assert!(is_leap(2400));
+    }
+
+    #[test]
+    fn test_is_leap_2100() {
+        // Divisible by 100 but not 400 → not leap
+        assert!(!is_leap(2100));
+    }
+
+    // ── denied with empty failures ──────────────────────────────────
+
+    #[test]
+    fn test_denied_empty_failures_no_failures_field() {
+        let event = AuditEvent::denied("user", "cmd", "reason", &[]);
+        let json = serde_json::to_string(&event).unwrap();
+        // failures should be absent from JSON
+        assert!(
+            !json.contains("failures"),
+            "empty failures vec should produce no 'failures' field, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_denied_with_failures_has_failures_field() {
+        let failures = vec!["x".into(), "y".into()];
+        let event = AuditEvent::denied("user", "cmd", "reason", &failures);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("failures"));
+    }
+
+    #[test]
+    fn test_denied_empty_failures_logfmt_no_failures() {
+        let event = AuditEvent::denied("user", "cmd", "reason", &[]);
+        let line = event.to_logfmt();
+        assert!(!line.contains("failures"));
+    }
+
+    // ── write_to (actual file I/O) ──────────────────────────────────
+
+    #[test]
+    fn test_write_to_json() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let event = AuditEvent::allowed("bob", "ls -la", "rule[0] ls");
+        let fmt = AuditFormat::Json;
+        event.write_to(&path, &fmt).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let trimmed = contents.trim();
+        assert!(trimmed.starts_with("{"));
+        assert!(trimmed.ends_with("}"));
+        assert!(trimmed.contains("\"bob\""));
+        assert!(trimmed.contains("\"allowed\""));
+
+        // Append a second event
+        let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd");
+        event2.write_to(&path, &fmt).unwrap();
+
+        let contents2 = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents2.trim().lines().collect();
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_write_to_logfmt() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let event = AuditEvent::denied(
+            "mallory",
+            "rm -rf /",
+            "dangerous command",
+            &["rule[0]: token 0 'rm' — blocked".into()],
+        );
+        let fmt = AuditFormat::Logfmt;
+        event.write_to(&path, &fmt).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let trimmed = contents.trim();
+        assert!(trimmed.starts_with("ts="));
+        assert!(trimmed.contains("user=mallory"));
+        assert!(trimmed.contains("result=denied"));
+        assert!(trimmed.contains("failures="));
+    }
+
+    #[test]
+    fn test_write_to_creates_file_if_not_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_audit.log");
+        let path_str = path.to_str().unwrap().to_string();
+
+        let event = AuditEvent::allowed("x", "y", "z");
+        event.write_to(&path_str, &AuditFormat::Json).unwrap();
+
+        assert!(path.exists());
+        let contents = std::fs::read_to_string(&path_str).unwrap();
+        assert!(!contents.is_empty());
     }
 }

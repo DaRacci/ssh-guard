@@ -1,4 +1,6 @@
+use crate::errors::{GuardError, Result};
 use serde::{Deserialize, Serialize};
+use std::{fmt::Result as FmtResult, os::raw, result::Result as StdResult};
 
 const DEFAULT_DURATION_MS: u64 = 5000;
 
@@ -16,26 +18,26 @@ impl Default for Duration {
 }
 
 impl Serialize for Duration {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> StdResult<S::Ok, S::Error> {
         s.serialize_str(&format!("{}ms", self.millis))
     }
 }
 
 impl<'de> Deserialize<'de> for Duration {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> StdResult<Self, D::Error> {
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = Duration;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> FmtResult {
                 f.write_str("a duration like \"5s\", \"5000ms\", or integer (ms)")
             }
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Duration, E> {
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> StdResult<Duration, E> {
                 Ok(Duration { millis: v as u64 })
             }
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Duration, E> {
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> StdResult<Duration, E> {
                 Ok(Duration { millis: v })
             }
-            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Duration, E> {
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> StdResult<Duration, E> {
                 parse_duration(s).map_err(E::custom)
             }
         }
@@ -43,42 +45,57 @@ impl<'de> Deserialize<'de> for Duration {
     }
 }
 
-pub fn parse_duration(s: &str) -> Result<Duration, String> {
+pub fn parse_duration(s: &str) -> Result<Duration> {
+    const IDENTIFIER_MULTIPLIERS: [(&str, f64); 4] = [
+        ("ms", 1.0),
+        ("s", 1000.0),
+        ("m", 60_000.0),
+        ("h", 3_600_000.0),
+    ];
+
     let s = s.trim().to_ascii_lowercase();
-    if s.ends_with("ms") {
-        let n: u64 = s[..s.len() - 2]
-            .parse()
-            .map_err(|_| format!("invalid duration: {s}"))?;
-        return Ok(Duration { millis: n });
-    }
-    if s.ends_with('s') && !s.ends_with("ms") {
-        let n: f64 = s[..s.len() - 1]
-            .parse()
-            .map_err(|_| format!("invalid duration: {s}"))?;
-        return Ok(Duration {
-            millis: (n * 1000.0) as u64,
-        });
-    }
-    if s.ends_with('m') && !s.ends_with("ms") {
-        let n: f64 = s[..s.len() - 1]
-            .parse()
-            .map_err(|_| format!("invalid duration: {s}"))?;
-        return Ok(Duration {
-            millis: (n * 60_000.0) as u64,
-        });
-    }
-    if s.ends_with('h') {
-        let n: f64 = s[..s.len() - 1]
-            .parse()
-            .map_err(|_| format!("invalid duration: {s}"))?;
-        return Ok(Duration {
-            millis: (n * 3_600_000.0) as u64,
-        });
+    let mut identifier = s
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    let raw_number = s[..s.len() - identifier.len()].trim();
+
+    if identifier.is_empty() {
+        identifier = "ms".to_string();
     }
 
-    // Bare integer = ms
-    let n: u64 = s.parse().map_err(|_| format!("invalid duration: {s}"))?;
-    Ok(Duration { millis: n })
+    if IDENTIFIER_MULTIPLIERS
+        .iter()
+        .all(|(id, _)| id != &identifier)
+    {
+        return Err(GuardError::Config(format!(
+            "invalid duration suffix: {identifier}"
+        )));
+    }
+
+    let multiplier = IDENTIFIER_MULTIPLIERS
+        .iter()
+        .find(|(id, _)| *id == identifier)
+        .map(|(_, mult)| *mult)
+        .ok_or_else(|| GuardError::Config(format!("invalid duration suffix: {identifier}")))?; // This should never fail since we already found the identifier above
+
+    let number = raw_number
+        .parse::<f64>()
+        .map_err(|_| GuardError::Config(format!("invalid duration number: {s}")))?;
+
+    if number < 0.0 {
+        return Err(GuardError::Config(format!(
+            "duration cannot be negative: {s}"
+        )));
+    }
+
+    let millis = (number * multiplier) as u64;
+    return Ok(Duration { millis });
 }
 
 #[cfg(test)]
@@ -133,12 +150,6 @@ mod tests {
     #[test]
     fn test_parse_error_abc() {
         assert!(parse_duration("abc").is_err());
-    }
-
-    #[test]
-    fn test_parse_negative_saturates_to_zero() {
-        // Negative float cast to u64 saturates to 0
-        assert_eq!(parse_duration("-5s").unwrap().millis, 0);
     }
 
     #[test]
@@ -203,5 +214,55 @@ mod tests {
         let s = serde_json::to_string(&d).unwrap();
         let back: Duration = serde_json::from_str(&s).unwrap();
         assert_eq!(back.millis, 120_000);
+    }
+
+    // --- visit_i64 ---
+
+    #[test]
+    fn test_deserialize_negative_i64() {
+        // visit_i64 with negative value should truncate to u64 (wrapping)
+        let d: Duration = serde_json::from_str("-5000").unwrap();
+        assert_eq!(d.millis, 18446744073709546616);
+    }
+
+    #[test]
+    fn test_deserialize_positive_i64() {
+        // visit_i64 with positive value
+        let d: Duration = serde_json::from_str("10000").unwrap();
+        assert_eq!(d.millis, 10000);
+    }
+
+    // --- expecting() via invalid deserialize type ---
+
+    #[test]
+    fn test_deserialize_bool_triggers_expecting() {
+        // Deserializing a bool should trigger the visitor's expecting() message
+        let result: StdResult<Duration, _> = serde_json::from_str("true");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("duration"),
+            "error should mention expected duration type: {err}"
+        );
+    }
+
+    // --- visit_str with invalid string ---
+
+    #[test]
+    fn test_deserialize_invalid_string() {
+        let result: StdResult<Duration, _> = serde_json::from_str(r#""not-a-duration""#);
+        assert!(result.is_err());
+    }
+
+    // --- parse_duration additional cases ---
+
+    #[test]
+    fn test_parse_integer_hours() {
+        assert_eq!(parse_duration("1h").unwrap().millis, 3_600_000);
+    }
+
+    #[test]
+    fn test_parse_integer_minutes() {
+        assert_eq!(parse_duration("2m").unwrap().millis, 120_000);
     }
 }

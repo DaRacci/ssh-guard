@@ -5,6 +5,7 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 #![deny(clippy::pedantic)]
+#![feature(coverage_attribute)]
 
 pub mod actions;
 pub mod audit;

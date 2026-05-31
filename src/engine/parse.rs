@@ -304,4 +304,18 @@ mod tests {
             _ => panic!("expected TemplateContext, got {p:?}"),
         }
     }
+
+    #[test]
+    fn test_parse_inline_flag_no_closing_brace() {
+        // raw has "={" but no closing '}' → falls through to template/literal
+        let p = parse_arg_pattern("--flag={value");
+        assert!(matches!(p, ArgPattern::Literal(_)));
+    }
+
+    #[test]
+    fn test_parse_eq_no_brace() {
+        // raw has "=" but not "={" — literal
+        let p = parse_arg_pattern("--key=value");
+        assert!(matches!(p, ArgPattern::Literal(_)));
+    }
 }

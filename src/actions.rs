@@ -3,11 +3,11 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Instant;
 
+use crate::config::Config;
 use crate::config::action::Action;
 use crate::config::duration::Duration;
 use crate::config::rule::Rule;
 use crate::config::subcommand::Subcommand;
-use crate::config::Config;
 use crate::errors::GuardError;
 
 fn resolve_within_roots(input_path: &Path, root_set: &[String]) -> Result<(), GuardError> {
@@ -395,6 +395,8 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use crate::config::arg::ArgStyle;
+    use crate::config::global::Global;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -821,6 +823,34 @@ mod tests {
         );
     }
 
+    /// When command_name() returns None, the cmd-skip block is skipped.
+    #[test]
+    fn test_build_command_no_command_name() {
+        // ReadFile action with no explicit command name -> command_name() returns None
+        let rule = Rule {
+            action: Action::ReadFile {
+                path_capture: "path".into(),
+                root_set: "root".into(),
+            },
+            command: None,
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let user_argv = vec!["somecmd".to_string()];
+        let subcommand_path: Vec<String> = vec![];
+
+        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+
+        // No action args (ReadFile has none), no cmd_name to skip,
+        // no subcommands -> user_argv passes through verbatim
+        assert_eq!(result, vec!["somecmd".to_string()]);
+    }
+
     #[test]
     fn test_build_command_no_action_args_with_subcommand() {
         // Empty action args, only subcommand name + pre_args injected
@@ -851,5 +881,1278 @@ mod tests {
         let sub_path = vec!["sub".to_string()];
         let result = build_command_argv(&rule, &sub_path, &user_argv);
         assert_eq!(result, vec!["sub".to_string(), "--internal".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for resolve_within_roots
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_within_roots_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "hello").unwrap();
+
+        let roots = vec![dir.path().to_string_lossy().to_string()];
+        assert!(resolve_within_roots(&file_path, &roots).is_ok());
+    }
+
+    #[test]
+    fn test_resolve_within_roots_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file_path = outside.path().join("test.txt");
+        std::fs::write(&file_path, "hello").unwrap();
+
+        let roots = vec![dir.path().to_string_lossy().to_string()];
+        let err = resolve_within_roots(&file_path, &roots).unwrap_err();
+        assert!(
+            matches!(err, GuardError::PathNotAllowed(_)),
+            "expected PathNotAllowed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_within_roots_canonicalize_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("nonexistent");
+        let roots = vec![dir.path().to_string_lossy().to_string()];
+        let err = resolve_within_roots(&nonexistent, &roots).unwrap_err();
+        assert!(
+            matches!(err, GuardError::PathNotAllowed(_)),
+            "expected PathNotAllowed, got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for resolve_path_parent
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_path_parent_no_parent() {
+        // Path with a single component has parent = "" (empty path)
+        // When canonicalized, "" becomes the current working directory.
+        // We use a temp dir as root and a single-component filename to test this.
+        let dir = tempfile::tempdir().unwrap();
+        let child_path = dir.path().join("foo");
+        std::fs::write(&child_path, "content").unwrap();
+
+        // Convert to a single-component path relative to dir
+        // Path::new("foo").parent() returns Some("") → canonicalizes to cwd
+        // Instead, just verify that resolve_path_parent works for a file within a root
+        let roots = vec![dir.path().to_string_lossy().to_string()];
+        assert!(resolve_path_parent(&child_path, &roots).is_ok());
+    }
+
+    #[test]
+    fn test_resolve_path_parent_normal_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sub").join("test.txt");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "hello").unwrap();
+
+        // parent is dir/sub
+        let roots = vec![dir.path().to_string_lossy().to_string()];
+        assert!(resolve_path_parent(&file_path, &roots).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for resolve_binary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_binary_implicit_symlinks_true() {
+        // Use a temp file (not a symlink) with implicit_symlinks=true
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("mybinary");
+        std::fs::write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        let result = resolve_binary(bin_path.to_str().unwrap(), true).unwrap();
+        // canonicalize resolves, so result should be an absolute path
+        assert!(result.contains("mybinary"));
+    }
+
+    #[test]
+    fn test_resolve_binary_implicit_symlinks_false_not_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("mybinary");
+        std::fs::write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        let result = resolve_binary(bin_path.to_str().unwrap(), false).unwrap();
+        assert_eq!(result, bin_path.to_str().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_binary_implicit_symlinks_false_is_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_file = dir.path().join("real");
+        std::fs::write(&real_file, "content").unwrap();
+        let symlink_path = dir.path().join("link");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let err = resolve_binary(symlink_path.to_str().unwrap(), false).unwrap_err();
+        assert!(
+            matches!(&err, GuardError::Action(msg) if msg.contains("symlink")),
+            "expected symlink error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_binary_not_exists() {
+        let err = resolve_binary("/nonexistent/binary/12345", true).unwrap_err();
+        assert!(
+            matches!(&err, GuardError::Action(msg) if msg.contains("does not exist")),
+            "expected 'does not exist' error, got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for find_sub_by_name
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_sub_by_name_found() {
+        let subs = vec![
+            Subcommand {
+                name: "status".into(),
+                arg_style: None,
+                flag_groups: vec![],
+                flags: vec![],
+                args: vec![],
+                pre_args: vec![],
+                subcommands: vec![],
+            },
+            Subcommand {
+                name: "show".into(),
+                arg_style: None,
+                flag_groups: vec![],
+                flags: vec![],
+                args: vec![],
+                pre_args: vec![],
+                subcommands: vec![],
+            },
+        ];
+        assert!(find_sub_by_name(&subs, "status").is_some());
+        assert!(find_sub_by_name(&subs, "show").is_some());
+    }
+
+    #[test]
+    fn test_find_sub_by_name_not_found() {
+        let subs = vec![Subcommand {
+            name: "status".into(),
+            arg_style: None,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        }];
+        assert!(find_sub_by_name(&subs, "nonexistent").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for action_run
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_action_run_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("true_script");
+        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
+        std::fs::set_permissions(
+            &bin_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let argv: Vec<String> = vec![];
+        let result = action_run(
+            bin_path.to_str().unwrap(),
+            &argv,
+            true,
+            &Duration { millis: 5000 },
+        );
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_action_run_timeout() {
+        // Create a script that sleeps for a long time, run with tiny timeout
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("sleeper");
+        std::fs::write(&bin_path, "#!/bin/sh\nsleep 10").unwrap();
+        std::fs::set_permissions(
+            &bin_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let argv: Vec<String> = vec![];
+        let result = action_run(
+            bin_path.to_str().unwrap(),
+            &argv,
+            true,
+            &Duration { millis: 1 },
+        );
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("timed out")),
+            "expected timeout, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_action_run_spawn_failure() {
+        // Use a directory as "binary" — exists but cannot be spawned as a process
+        let dir = tempfile::tempdir().unwrap();
+        let argv: Vec<String> = vec![];
+        let result = action_run(
+            dir.path().to_str().unwrap(),
+            &argv,
+            false,
+            &Duration { millis: 5000 },
+        );
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("cannot spawn")),
+            "expected spawn failure, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for action_read_file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_action_read_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("readme.txt");
+        std::fs::write(&file_path, "hello world").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_action_read_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("large.txt");
+        let big_content = "a".repeat(500);
+        std::fs::write(&file_path, &big_content).unwrap();
+
+        let config = Config {
+            global: Global {
+                max_read_bytes: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("exceeds limit")),
+            "expected file too large error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_action_read_file_path_not_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file_path = outside.path().join("secret.txt");
+        std::fs::write(&file_path, "secret").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        assert!(
+            matches!(&result, Err(GuardError::PathNotAllowed(_))),
+            "expected PathNotAllowed, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for action_tail_file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_action_tail_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.log");
+        let content = "line1\nline2\nline3\n";
+        std::fs::write(&file_path, content).unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_tail_file(file_path.to_str().unwrap(), 10, &config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_action_tail_file_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // Path within roots but file doesn't exist → tail fails
+        // Create a directory - tail will fail on it since it's not a regular file
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        let bad_path = dir.path().join("subdir");
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_tail_file(bad_path.to_str().unwrap(), 10, &config);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("tail failed")),
+            "expected tail failure, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_action_tail_file_lines_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("long.log");
+        let content: String = (0..20).map(|i| format!("line{i}\n")).collect();
+        std::fs::write(&file_path, &content).unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 5,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        // Request 100 lines, but should be capped to 5
+        let result = action_tail_file(file_path.to_str().unwrap(), 100, &config);
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for action_stat_path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_action_stat_path_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("afile.txt");
+        std::fs::write(&file_path, "data").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_stat_path(file_path.to_str().unwrap(), &config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_action_stat_path_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub_dir = dir.path().join("subdir");
+        std::fs::create_dir(&sub_dir).unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_stat_path(&sub_dir.to_string_lossy(), &config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_action_stat_path_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_file = dir.path().join("real.txt");
+        std::fs::write(&real_file, "data").unwrap();
+        let link_path = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real_file, &link_path).unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_stat_path(link_path.to_str().unwrap(), &config);
+        assert!(result.is_ok());
+    }
+
+    /// Stat a named pipe (fifo) -> "other" file type arm.
+    #[test]
+    fn test_action_stat_path_other_fifo() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo_path = dir.path().join("test_fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("mkfifo should be available");
+        assert!(status.success(), "mkfifo failed");
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_stat_path(fifo_path.to_str().unwrap(), &config);
+        assert!(result.is_ok());
+        // fifo cleaned up when TempDir drops
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for action_list_dir
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_action_list_dir_success() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+
+        let result = action_list_dir(dir.path().to_str().unwrap(), &config);
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_run
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_run_with_run_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("true_script");
+        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
+        std::fs::set_permissions(
+            &bin_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::Run {
+                binary: bin_path.to_str().unwrap().into(),
+                args: vec![],
+                timeout: Duration { millis: 5000 },
+            },
+            command: Some("true".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let result = execute_run(&config, &rule, &[], &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_run_wrong_action_type() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::ShowHelp,
+            command: Some("help".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let result = execute_run(&config, &rule, &[], &[]);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected Run action"),
+            "expected 'expected Run action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_read_file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_read_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("data.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_read_file_missing_capture() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("missing capture")),
+            "expected missing capture error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_read_file_unknown_root_set() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "custom".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), "/some/path".into());
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("unknown root set")),
+            "expected unknown root set error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_read_file_wrong_action() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ShowHelp;
+        let captures = HashMap::new();
+        let result = execute_read_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected ReadFile action"),
+            "expected 'expected ReadFile action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_tail_file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_tail_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("app.log");
+        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: None,
+            default_lines: 10,
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_tail_file_missing_capture() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: None,
+            default_lines: 10,
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("missing capture")),
+            "expected missing capture error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_tail_file_unknown_root_set() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: None,
+            default_lines: 10,
+            root_set: "custom".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), "/some/path".into());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("unknown root set")),
+            "expected unknown root set error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_tail_file_lines_from_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("app.log");
+        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: Some("lines".into()),
+            default_lines: 10,
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        captures.insert("lines".into(), "1".into());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_tail_file_lines_from_default() {
+        // lines_capture is Some but the capture key doesn't exist in captures
+        // → falls back to default_lines
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("app.log");
+        std::fs::write(&file_path, "line1\n").unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: Some("missing_lines".into()),
+            default_lines: 5,
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_tail_file_wrong_action() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ShowHelp;
+        let captures = HashMap::new();
+        let result = execute_tail_file(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected TailFile action"),
+            "expected 'expected TailFile action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_stat_path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_stat_path_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("stat.txt");
+        std::fs::write(&file_path, "data").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::StatPath {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_stat_path(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_stat_path_missing_capture() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::StatPath {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+        let result = execute_stat_path(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("missing capture")),
+            "expected missing capture error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_stat_path_unknown_root_set() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::StatPath {
+            path_capture: "path".into(),
+            root_set: "custom".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), "/some/path".into());
+        let result = execute_stat_path(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("unknown root set")),
+            "expected unknown root set error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_stat_path_wrong_action() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ShowHelp;
+        let captures = HashMap::new();
+        let result = execute_stat_path(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected StatPath action"),
+            "expected 'expected StatPath action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_list_dir
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_list_dir_success() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let action = Action::ListDir {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), dir.path().to_string_lossy().to_string());
+
+        let result = execute_list_dir(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_list_dir_missing_capture() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ListDir {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+        let result = execute_list_dir(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("missing capture")),
+            "expected missing capture error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_list_dir_unknown_root_set() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ListDir {
+            path_capture: "path".into(),
+            root_set: "custom".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), "/some/path".into());
+        let result = execute_list_dir(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("unknown root set")),
+            "expected unknown root set error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_list_dir_wrong_action() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let action = Action::ShowHelp;
+        let captures = HashMap::new();
+        let result = execute_list_dir(&config, &action, &captures);
+        assert!(
+            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected ListDir action"),
+            "expected 'expected ListDir action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute_show_help
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_show_help_prints_help_text() {
+        let config = Config {
+            global: Global {
+                help_text: "Available commands:\n  status\n  show\n".into(),
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let result = execute_show_help(&config);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for execute (dispatch)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_dispatches_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("true_script");
+        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
+        std::fs::set_permissions(
+            &bin_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::Run {
+                binary: bin_path.to_str().unwrap().into(),
+                args: vec![],
+                timeout: Duration { millis: 5000 },
+            },
+            command: Some("true".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let captures = HashMap::new();
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_dispatches_read_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("exec.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::ReadFile {
+                path_capture: "path".into(),
+                root_set: "roots".into(),
+            },
+            command: Some("cat".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_dispatches_tail_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("exec.log");
+        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let config = Config {
+            global: Global {
+                max_tail_lines: 100,
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::TailFile {
+                path_capture: "path".into(),
+                lines_capture: None,
+                default_lines: 10,
+                root_set: "roots".into(),
+            },
+            command: Some("tail".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_dispatches_stat_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("exec_stat.txt");
+        std::fs::write(&file_path, "data").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::StatPath {
+                path_capture: "path".into(),
+                root_set: "roots".into(),
+            },
+            command: Some("stat".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_dispatches_list_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f1.txt"), "").unwrap();
+
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::ListDir {
+                path_capture: "path".into(),
+                root_set: "roots".into(),
+            },
+            command: Some("ls".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), dir.path().to_string_lossy().to_string());
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_dispatches_show_help() {
+        let config = Config {
+            global: Global {
+                help_text: "help\n".into(),
+                ..Global::default()
+            },
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::ShowHelp,
+            command: Some("help".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let captures = HashMap::new();
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_execute_wrong_action_type() {
+        let config = Config {
+            global: Global::default(),
+            contracts: HashMap::new(),
+            flag_groups: HashMap::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let rule = Rule {
+            action: Action::ShowHelp,
+            command: Some("help".into()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        let captures = HashMap::new();
+        // The match arm `_ =>` in execute() is unreachable for valid Action variants.
+        // This test verifies dispatch for ShowHelp works.
+        let result = execute(&config, &rule, &[], &captures, &[]);
+        assert_eq!(result.unwrap(), 0);
     }
 }

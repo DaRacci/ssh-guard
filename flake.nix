@@ -62,7 +62,9 @@
 
             languages.rust = {
               enable = true;
-              channel = "stable";
+              # Only reason to use nightly is for llvm-tools & the no_coverage attribute, so we can get coverage reports working.
+              # All code should be compatible with stable, and we should be able to switch to stable once possible.
+              channel = "nightly";
               components = [
                 "rustc"
                 "cargo"

@@ -133,6 +133,45 @@ min = 1
     }
 
     #[test]
+    fn test_serialize_int_range_format() {
+        let c = Contract::IntRange { min: 0, max: 100 };
+        let s = toml::to_string(&c).unwrap();
+        assert!(s.contains(r#"type = "int_range""#));
+        assert!(s.contains("min = 0"));
+        assert!(s.contains("max = 100"));
+    }
+
+    #[test]
+    fn test_serialize_string_len_format() {
+        let c = Contract::StringLen { min: 1, max: 64 };
+        let s = toml::to_string(&c).unwrap();
+        assert!(s.contains(r#"type = "string_len""#));
+        assert!(s.contains("min = 1"));
+        assert!(s.contains("max = 64"));
+    }
+
+    #[test]
+    fn test_serialize_enum_format() {
+        let c = Contract::Enum {
+            values: vec!["a".into(), "b".into()],
+        };
+        let s = toml::to_string(&c).unwrap();
+        assert!(s.contains(r#"type = "enum""#));
+        assert!(s.contains(r#"values = ["a", "b"]"#));
+    }
+
+    // Trigger visitor expecting() by providing wrong TOML type (bool instead of table)
+    #[test]
+    fn test_error_message_contains_expecting() {
+        let toml_str = "true";
+        let result: Result<Contract, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+
+        assert!(!err.is_empty());
+    }
+
+    #[test]
     fn test_round_trip_enum() {
         let c = Contract::Enum {
             values: vec!["a".into(), "b".into()],

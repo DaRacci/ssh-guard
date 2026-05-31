@@ -209,4 +209,30 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn test_validate_string_empty() {
+        let contracts = HashMap::new();
+        assert!(validate_template_value("", &TemplateType::String, &contracts).is_err());
+        assert!(validate_template_value("a", &TemplateType::String, &contracts).is_ok());
+    }
+
+    #[test]
+    fn test_contract_int_range_parse_error() {
+        // Covers the .map_err(|_| ...) closure in IntRange validation when
+        // the value is not a valid integer (e.g. "abc" for an int_range contract)
+        let mut contracts = HashMap::new();
+        contracts.insert(
+            "port".into(),
+            Contract::IntRange {
+                min: 1024,
+                max: 65535,
+            },
+        );
+        let result =
+            validate_template_value("abc", &TemplateType::ContractRef("port".into()), &contracts);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not a valid integer"));
+    }
 }

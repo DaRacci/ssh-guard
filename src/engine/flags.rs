@@ -81,4 +81,76 @@ mod tests {
         let result = expand_flags(&groups, &[], &["-x".into()]);
         assert_eq!(result, vec!["-x"]);
     }
+
+    #[test]
+    fn test_effective_style_sub_no_override() {
+        let rule = Rule {
+            action: crate::config::action::Action::ShowHelp,
+            command: Some("t".into()),
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        };
+        let sub = Subcommand {
+            name: "sub".into(),
+            arg_style: None,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        // sub has no style override → falls back to rule's style
+        let style = effective_style(&rule, Some(&sub));
+        assert_eq!(style, &ArgStyle::GnuLong);
+    }
+
+    #[test]
+    fn test_effective_style_sub_with_override() {
+        let rule = Rule {
+            action: crate::config::action::Action::ShowHelp,
+            command: Some("t".into()),
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        };
+        let sub = Subcommand {
+            name: "sub".into(),
+            arg_style: Some(ArgStyle::Dos),
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec![],
+            subcommands: vec![],
+        };
+        // sub has Dos override → returns sub's style, not rule's
+        let style = effective_style(&rule, Some(&sub));
+        assert_eq!(style, &ArgStyle::Dos);
+    }
+
+    #[test]
+    fn test_effective_style_no_sub() {
+        let rule = Rule {
+            action: crate::config::action::Action::ShowHelp,
+            command: Some("t".into()),
+            args: vec![],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::Dos,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        };
+        // None sub → falls back to rule's style
+        let style = effective_style(&rule, None);
+        assert_eq!(style, &ArgStyle::Dos);
+    }
 }

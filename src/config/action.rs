@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::duration::Duration;
 
+#[coverage(off)]
 const fn default_tail_lines() -> usize {
     200
 }

@@ -62,8 +62,8 @@ mod tests {
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
     use crate::config::audit::AuditFormat;
-    use crate::config::duration::parse_duration;
     use crate::config::duration::Duration;
+    use crate::config::duration::parse_duration;
 
     use super::*;
 
@@ -558,6 +558,48 @@ audit_log = "/dev/null"
         );
         let cfg = result.unwrap();
         assert!(cfg.rules.is_empty());
+    }
+
+    #[test]
+    fn test_to_toml_string_empty_config() {
+        // to_toml_string with default config — success path
+        let cfg = Config {
+            global: Global {
+                audit_log: "/dev/null".into(),
+                audit_format: AuditFormat::Json,
+                help_text: String::new(),
+                log_tag: "test".into(),
+                max_read_bytes: 100,
+                max_tail_lines: 10,
+                default_tail_lines: 5,
+            },
+            contracts: Contracts::new(),
+            flag_groups: FlagGroups::new(),
+            rules: vec![],
+            roots: vec![],
+            units: vec![],
+        };
+        let s = cfg.to_toml_string().unwrap();
+        assert!(s.contains("audit_log"));
+        assert!(s.contains("/dev/null"));
+    }
+
+    #[test]
+    fn test_from_file_success_via_inline() {
+        use std::io::Write;
+        let toml_content = r#"
+[global]
+audit_log = "/tmp/test_inline.log"
+[[rules]]
+action = { type = "run", binary = "/bin/true" }
+"#;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "{}", toml_content).unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let cfg = Config::from_file(&path).unwrap();
+        assert_eq!(cfg.global.audit_log, "/tmp/test_inline.log");
+        assert_eq!(cfg.rules.len(), 1);
+        drop(tmp);
     }
 
     #[test]

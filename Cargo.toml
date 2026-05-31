@@ -18,6 +18,7 @@ syslog = "~7"
 
 [dev-dependencies]
 tempfile = "3"
+temp-env = "0.3"
 
 [profile.coverage]
 inherits = "dev"
