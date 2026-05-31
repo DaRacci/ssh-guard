@@ -1,0 +1,58 @@
+roots = []
+units = []
+
+[global]
+audit_log = "/tmp/ssh-guard.log"
+audit_format = "logfmt"
+help_text = ""
+log_tag = "ssh-guard"
+max_read_bytes = 1048576
+max_tail_lines = 5000
+default_tail_lines = 200
+
+[contracts.unit]
+type = "enum"
+values = [
+    "angrr",
+    "attic-watch-store",
+    "nix-gc",
+]
+
+[flag_groups]
+sys-common = [
+    "--no-pager",
+    "--full",
+]
+
+[[rules]]
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "run"
+binary = "/run/current-system/sw/bin/systemctl"
+args = []
+timeout = "5000ms"
+
+[[rules.subcommands]]
+name = "status"
+args = ["{unit}.service"]
+
+[[rules.subcommands]]
+name = "show"
+args = ["{unit}"]
+
+[[rules]]
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = [
+    "--since",
+    "-n",
+    "--no-pager",
+]
+
+[rules.action]
+type = "run"
+binary = "/run/current-system/sw/bin/journalctl"
+args = []
+timeout = "5000ms"
