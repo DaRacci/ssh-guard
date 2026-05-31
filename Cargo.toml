@@ -1,0 +1,29 @@
+[package]
+name = "ssh-guard"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.*"
+serde_json = "1"
+toml_edit = "~0.25"
+thiserror = "2"
+shlex = "~2.0.1"
+log = "0.4"
+syslog = "~7"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.coverage]
+inherits = "dev"
+debug = true
+
+[profile.release]
+panic = "abort"
+lto = true
+strip = true
