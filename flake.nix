@@ -1,5 +1,5 @@
 {
-  description = "Description for the project";
+  description = "ssh-guard: restricted SSH command guard daemon and NixOS module";
 
   inputs = {
     devenv-root = {
@@ -10,6 +10,8 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     devenv.url = "github:cachix/devenv";
+    treefmt.url = "github:numtide/treefmt-nix";
+    treefmt.inputs.nixpkgs.follows = "nixpkgs";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -20,11 +22,15 @@
   };
 
   outputs =
-    inputs@{ flake-parts, ... }:
+    inputs@{ flake-parts, self, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      debug = true;
       imports = [
         inputs.devenv.flakeModule
+        inputs.treefmt.flakeModule
       ];
+
+      flake.nixosModules.default = import ./nix/modules/nixos/ssh-guard.nix { inherit self; };
 
       systems = [
         "x86_64-linux"
@@ -36,7 +42,7 @@
 
       perSystem =
         { pkgs, ... }:
-        {
+        rec {
           packages.default = pkgs.rustPlatform.buildRustPackage {
             pname = "ssh-guard";
             version = "0.1.0";
@@ -74,6 +80,20 @@
                 "llvm-tools"
               ];
               wild.enable = true;
+            };
+          };
+
+          treefmt = {
+            projectRootFile = ".git/config";
+
+            programs = {
+              nixfmt.enable = true;
+              statix.enable = true;
+              mdformat.enable = true;
+              rustfmt = {
+                enable = true;
+                package = devenv.shells.default.languages.rust.packages.rustfmt;
+              };
             };
           };
         };
