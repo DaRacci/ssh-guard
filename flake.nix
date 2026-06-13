@@ -46,19 +46,7 @@
       perSystem =
         { pkgs, ... }:
         rec {
-          packages.default = pkgs.rustPlatform.buildRustPackage {
-            pname = "ssh-guard";
-            version = "0.1.0";
-            src = ./.;
-
-            cargoHash = "sha256-7vkwNmtwvgTs2wt+lF8smjtg1Huke54WZJ9UvLy48tU=";
-
-            meta = {
-              description = "Restricted SSH command guard";
-              license = pkgs.lib.licenses.agpl3Only;
-              mainProgram = "ssh-guard";
-            };
-          };
+          packages.default = pkgs.callPackage ./nix/package.nix { inherit self inputs pkgs; };
 
           devenv.shells.default = {
             containers = pkgs.lib.mkForce { };
@@ -99,6 +87,9 @@
               };
             };
           };
+
+          packages.ssh-guard-vm = import ./nix/tests/ssh-guard-vm.nix { inherit self pkgs; };
+          checks.ssh-guard-vm = packages.ssh-guard-vm;
         };
     };
 }

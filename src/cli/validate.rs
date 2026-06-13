@@ -106,7 +106,7 @@ mod tests {
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+action = {{ type = "run", binary = "/bin/sh", args = [] }}
 implicit_symlinks = true
 "#
         )
@@ -177,7 +177,7 @@ implicit_symlinks = false
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+action = {{ type = "run", binary = "/bin/sh", args = [] }}
 implicit_symlinks = true
 
 [[rules]]
@@ -224,7 +224,7 @@ action = {{ type = "show_help" }}
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+action = {{ type = "run", binary = "/bin/sh", args = [] }}
 implicit_symlinks = true
 
 [[rules]]
@@ -449,7 +449,7 @@ audit_log = "/dev/null"
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+action = {{ type = "run", binary = "/bin/sh", args = [] }}
 implicit_symlinks = true
 
 [profiles.admin]
@@ -513,7 +513,7 @@ action = {{ type = "show_help" }}
 users = ["admin_user"]
 
 [[profiles.admin.rules]]
-action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+action = {{ type = "run", binary = "/bin/sh", args = [] }}
 implicit_symlinks = true
 "#
         )
