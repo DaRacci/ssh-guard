@@ -56,3 +56,33 @@ type = "run"
 binary = "/run/current-system/sw/bin/journalctl"
 args = []
 timeout = "5000ms"
+
+# ── Profile example ────────────────────────────────────────────────
+# Profiles extend the base (global) config for specific SSH users.
+# Selected at runtime via $USER when `ssh-guard run` executes.
+
+[profiles.admin]
+users = ["root", "admin"]
+
+[profiles.admin.global]
+audit_log = "/tmp/ssh-guard-admin.log"
+help_text = "Admin commands: systemctl, journalctl"
+
+[profiles.admin.contracts]
+port = { type = "int_range", min = 1, max = 65535 }
+
+[profiles.admin.flag_groups]
+admin-common = ["--verbose"]
+
+[[profiles.admin.rules]]
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[profiles.admin.rules.action]
+type = "run"
+binary = "/run/current-system/sw/bin/ss"
+args = []
+timeout = "5000ms"
+
+[[profiles.admin.rules.subcommands]]
+name = "-tlnp"

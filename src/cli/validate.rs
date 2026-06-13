@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use crate::{
-    config::{Config, action::Action},
+    config::{Config, action::Action, rule::Rule},
     errors::GuardError,
 };
 
@@ -11,37 +11,32 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
 
     let mut errors: Vec<String> = Vec::new();
 
-    for (i, rule) in cfg.rules.iter().enumerate() {
-        if let Action::Run { binary, .. } = &rule.action {
-            let path = std::path::Path::new(binary);
-            if !path.exists() {
-                errors.push(format!("rule[{i}]: binary '{binary}' does not exist"));
-            } else if !rule.implicit_symlinks {
-                match std::fs::symlink_metadata(binary) {
-                    Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
-                        Ok(resolved) => {
-                            errors.push(format!(
-                                    "rule[{i}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
-                                    resolved.display()
-                                ));
-                        }
-                        Err(_) => {
-                            errors.push(format!(
-                                    "rule[{i}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)"
-                                ));
-                        }
-                    },
-                    Err(e) => {
-                        errors.push(format!("rule[{i}]: cannot stat binary '{binary}': {e}"));
-                    }
-                    _ => {} // not a symlink, OK
-                }
-            }
+    // Validate base rules
+    validate_rules(&cfg.rules, "base", &mut errors);
+
+    // Validate profile rules
+    for (pname, profile) in &cfg.profiles {
+        if let Some(ref rules) = profile.rules {
+            validate_rules(rules, &format!("profile '{pname}'"), &mut errors);
         }
     }
 
+    // Validate no duplicate SSH usernames across profiles
+    if let Err(e) = cfg.check_duplicate_users() {
+        errors.push(e.to_string());
+    }
+
     if errors.is_empty() {
-        println!("Config is valid. {} rule(s) checked.", cfg.rules.len());
+        let count = cfg.rules.len();
+        let profile_count = cfg
+            .profiles
+            .values()
+            .filter_map(|p| p.rules.as_ref().map(|r| r.len()))
+            .sum::<usize>();
+        let total = count + profile_count;
+        println!(
+            "Config is valid. {count} base rule(s), {profile_count} profile rule(s) ({total} total)."
+        );
         Ok(())
     } else {
         for err in &errors {
@@ -53,6 +48,45 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
             errors.len(),
             detail
         ))))
+    }
+}
+
+fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
+    for (i, rule) in rules.iter().enumerate() {
+        if let Action::Run { binary, .. } = &rule.action {
+            let path = std::path::Path::new(binary);
+            if !path.exists() {
+                errors.push(format!(
+                    "{} rule[{i}]: binary '{binary}' does not exist",
+                    scope
+                ));
+            } else if !rule.implicit_symlinks {
+                match std::fs::symlink_metadata(binary) {
+                    Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
+                        Ok(resolved) => {
+                            errors.push(format!(
+                                    "{} rule[{i}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
+                                    scope,
+                                    resolved.display()
+                                ));
+                        }
+                        Err(_) => {
+                            errors.push(format!(
+                                    "{} rule[{i}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)",
+                                    scope
+                                ));
+                        }
+                    },
+                    Err(e) => {
+                        errors.push(format!(
+                            "{} rule[{i}]: cannot stat binary '{binary}': {e}",
+                            scope
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -399,6 +433,88 @@ implicit_symlinks = false
             tmp,
             r#"[global]
 audit_log = "/dev/null"
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    }
+
+    /// Validate with a profile that has rules: base missing binary + profile missing binary.
+    #[test]
+    fn test_validate_profile_rules_missing_binary() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[[rules]]
+action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+implicit_symlinks = true
+
+[profiles.admin]
+users = ["admin_user"]
+
+[[profiles.admin.rules]]
+action = {{ type = "run", binary = "/nonexistent/profile/bin", args = [] }}
+implicit_symlinks = true
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("profile 'admin'"),
+            "expected error mentioning profile 'admin', got: {err}"
+        );
+    }
+
+    /// Validate with duplicate SSH usernames across profiles → error.
+    #[test]
+    fn test_validate_duplicate_users() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[[rules]]
+action = {{ type = "show_help" }}
+
+[profiles.admin]
+users = ["alice", "bob"]
+
+[profiles.dev]
+users = ["bob", "charlie"]
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("duplicate user"),
+            "expected 'duplicate user' error, got: {err}"
+        );
+    }
+
+    /// Validate with valid profile rules (all binaries exist) → OK.
+    #[test]
+    fn test_validate_valid_profile_rules() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[[rules]]
+action = {{ type = "show_help" }}
+
+[profiles.admin]
+users = ["admin_user"]
+
+[[profiles.admin.rules]]
+action = {{ type = "run", binary = "/usr/bin/env", args = [] }}
+implicit_symlinks = true
 "#
         )
         .unwrap();

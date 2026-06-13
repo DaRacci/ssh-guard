@@ -1133,12 +1133,8 @@ mod tests {
         std::fs::write(&file_path, "hello world").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_read_file(file_path.to_str().unwrap(), &config);
@@ -1157,11 +1153,8 @@ mod tests {
                 max_read_bytes: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_read_file(file_path.to_str().unwrap(), &config);
@@ -1179,12 +1172,8 @@ mod tests {
         std::fs::write(&file_path, "secret").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_read_file(file_path.to_str().unwrap(), &config);
@@ -1210,11 +1199,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_tail_file(file_path.to_str().unwrap(), 10, &config);
@@ -1234,11 +1220,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_tail_file(bad_path.to_str().unwrap(), 10, &config);
@@ -1260,11 +1243,8 @@ mod tests {
                 max_tail_lines: 5,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         // Request 100 lines, but should be capped to 5
@@ -1283,12 +1263,8 @@ mod tests {
         std::fs::write(&file_path, "data").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_stat_path(file_path.to_str().unwrap(), &config);
@@ -1302,12 +1278,8 @@ mod tests {
         std::fs::create_dir(&sub_dir).unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_stat_path(&sub_dir.to_string_lossy(), &config);
@@ -1323,12 +1295,8 @@ mod tests {
         std::os::unix::fs::symlink(&real_file, &link_path).unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_stat_path(link_path.to_str().unwrap(), &config);
@@ -1347,12 +1315,8 @@ mod tests {
         assert!(status.success(), "mkfifo failed");
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_stat_path(fifo_path.to_str().unwrap(), &config);
@@ -1372,12 +1336,8 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
 
         let result = action_list_dir(dir.path().to_str().unwrap(), &config);
@@ -1399,14 +1359,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let rule = Rule {
             action: Action::Run {
                 binary: bin_path.to_str().unwrap().into(),
@@ -1428,14 +1381,7 @@ mod tests {
 
     #[test]
     fn test_execute_run_wrong_action_type() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let rule = Rule {
             action: Action::ShowHelp,
             command: Some("help".into()),
@@ -1465,12 +1411,8 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::ReadFile {
             path_capture: "path".into(),
@@ -1485,14 +1427,7 @@ mod tests {
 
     #[test]
     fn test_execute_read_file_missing_capture() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ReadFile {
             path_capture: "path".into(),
             root_set: "roots".into(),
@@ -1508,14 +1443,7 @@ mod tests {
 
     #[test]
     fn test_execute_read_file_unknown_root_set() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ReadFile {
             path_capture: "path".into(),
             root_set: "custom".into(),
@@ -1532,14 +1460,7 @@ mod tests {
 
     #[test]
     fn test_execute_read_file_wrong_action() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ShowHelp;
         let captures = HashMap::new();
         let result = execute_read_file(&config, &action, &captures);
@@ -1564,11 +1485,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::TailFile {
             path_capture: "path".into(),
@@ -1585,14 +1503,7 @@ mod tests {
 
     #[test]
     fn test_execute_tail_file_missing_capture() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::TailFile {
             path_capture: "path".into(),
             lines_capture: None,
@@ -1610,14 +1521,7 @@ mod tests {
 
     #[test]
     fn test_execute_tail_file_unknown_root_set() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::TailFile {
             path_capture: "path".into(),
             lines_capture: None,
@@ -1645,11 +1549,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::TailFile {
             path_capture: "path".into(),
@@ -1678,11 +1579,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::TailFile {
             path_capture: "path".into(),
@@ -1699,14 +1597,7 @@ mod tests {
 
     #[test]
     fn test_execute_tail_file_wrong_action() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ShowHelp;
         let captures = HashMap::new();
         let result = execute_tail_file(&config, &action, &captures);
@@ -1727,12 +1618,8 @@ mod tests {
         std::fs::write(&file_path, "data").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::StatPath {
             path_capture: "path".into(),
@@ -1747,14 +1634,7 @@ mod tests {
 
     #[test]
     fn test_execute_stat_path_missing_capture() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::StatPath {
             path_capture: "path".into(),
             root_set: "roots".into(),
@@ -1769,14 +1649,7 @@ mod tests {
 
     #[test]
     fn test_execute_stat_path_unknown_root_set() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::StatPath {
             path_capture: "path".into(),
             root_set: "custom".into(),
@@ -1792,14 +1665,7 @@ mod tests {
 
     #[test]
     fn test_execute_stat_path_wrong_action() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ShowHelp;
         let captures = HashMap::new();
         let result = execute_stat_path(&config, &action, &captures);
@@ -1820,12 +1686,8 @@ mod tests {
         std::fs::write(dir.path().join("b.txt"), "").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let action = Action::ListDir {
             path_capture: "path".into(),
@@ -1840,14 +1702,7 @@ mod tests {
 
     #[test]
     fn test_execute_list_dir_missing_capture() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ListDir {
             path_capture: "path".into(),
             root_set: "roots".into(),
@@ -1862,14 +1717,7 @@ mod tests {
 
     #[test]
     fn test_execute_list_dir_unknown_root_set() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ListDir {
             path_capture: "path".into(),
             root_set: "custom".into(),
@@ -1885,14 +1733,7 @@ mod tests {
 
     #[test]
     fn test_execute_list_dir_wrong_action() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let action = Action::ShowHelp;
         let captures = HashMap::new();
         let result = execute_list_dir(&config, &action, &captures);
@@ -1913,11 +1754,7 @@ mod tests {
                 help_text: "Available commands:\n  status\n  show\n".into(),
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
+            ..Default::default()
         };
         let result = execute_show_help(&config);
         assert_eq!(result.unwrap(), 0);
@@ -1938,14 +1775,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let rule = Rule {
             action: Action::Run {
                 binary: bin_path.to_str().unwrap().into(),
@@ -1973,12 +1803,8 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let rule = Rule {
             action: Action::ReadFile {
@@ -2011,11 +1837,8 @@ mod tests {
                 max_tail_lines: 100,
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let rule = Rule {
             action: Action::TailFile {
@@ -2046,12 +1869,8 @@ mod tests {
         std::fs::write(&file_path, "data").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let rule = Rule {
             action: Action::StatPath {
@@ -2079,12 +1898,8 @@ mod tests {
         std::fs::write(dir.path().join("f1.txt"), "").unwrap();
 
         let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
             roots: vec![dir.path().to_string_lossy().to_string()],
-            units: vec![],
+            ..Default::default()
         };
         let rule = Rule {
             action: Action::ListDir {
@@ -2113,11 +1928,7 @@ mod tests {
                 help_text: "help\n".into(),
                 ..Global::default()
             },
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
+            ..Default::default()
         };
         let rule = Rule {
             action: Action::ShowHelp,
@@ -2137,14 +1948,7 @@ mod tests {
 
     #[test]
     fn test_execute_wrong_action_type() {
-        let config = Config {
-            global: Global::default(),
-            contracts: HashMap::new(),
-            flag_groups: HashMap::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
-        };
+        let config = Config::default();
         let rule = Rule {
             action: Action::ShowHelp,
             command: Some("help".into()),

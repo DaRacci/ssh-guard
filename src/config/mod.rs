@@ -4,18 +4,20 @@ pub mod audit;
 pub mod contract;
 pub mod duration;
 pub mod global;
+pub mod profile;
 pub mod rule;
 pub mod subcommand;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::config::{contract::Contract, global::Global, rule::Rule};
+use crate::config::{contract::Contract, global::Global, profile::Profile, rule::Rule};
 
 pub type FlagGroups = HashMap<String, Vec<String>>;
 pub type Contracts = HashMap<String, Contract>;
+pub type Profiles = HashMap<String, Profile>;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub global: Global,
@@ -36,6 +38,11 @@ pub struct Config {
     /// Allowed systemd units.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub units: Vec<String>,
+
+    /// Named profiles that extend the base config for specific SSH users.
+    /// Key is profile name (any unique string).
+    #[serde(default, skip_serializing_if = "Profiles::is_empty")]
+    pub profiles: Profiles,
 }
 
 impl Config {
@@ -53,6 +60,113 @@ impl Config {
     pub fn write_to_file(&self, path: &str) -> Result<(), crate::errors::GuardError> {
         let toml_str = self.to_toml_string()?;
         std::fs::write(path, toml_str)?;
+        Ok(())
+    }
+
+    /// Resolve effective config for a given SSH username.
+    ///
+    /// - If no profile matches -> base config unchanged.
+    /// - If exactly one profile matches -> merge base + profile.
+    /// - If multiple profiles match -> returns error.
+    pub fn resolve_for_user(&self, user: &str) -> Result<Config, crate::errors::GuardError> {
+        let matching: Vec<(&String, &Profile)> = self
+            .profiles
+            .iter()
+            .filter(|(_, p)| p.users.iter().any(|u| u == user))
+            .collect();
+
+        if matching.len() > 1 {
+            let names: Vec<&str> = matching.iter().map(|(n, _)| n.as_str()).collect();
+            return Err(crate::errors::GuardError::Config(format!(
+                "user '{user}' matches multiple profiles: {}",
+                names.join(", ")
+            )));
+        }
+
+        let Some((_, profile)) = matching.into_iter().next() else {
+            // No profile matches — use base config unchanged, strip profiles
+            let mut base = self.clone();
+            base.profiles = Profiles::new();
+            return Ok(base);
+        };
+
+        Ok(self.merge_profile(profile))
+    }
+
+    /// Merge a single profile into this base config, returning a new Config.
+    ///
+    /// Merge rules:
+    /// - `global`: field-wise override, profile fills unspecified fields from base.
+    /// - `contracts`: map merge, profile keys override same-name base keys.
+    /// - `flag_groups`: map merge, profile keys override same-name base keys.
+    /// - `rules`: append profile rules after base rules.
+    /// - `roots`: append unique values preserving base-first order.
+    /// - `units`: append unique values preserving base-first order.
+    /// - Unset profile sections leave base values intact.
+    pub fn merge_profile(&self, profile: &Profile) -> Config {
+        let mut merged = self.clone();
+
+        // Global override
+        if let Some(ref ov) = profile.global {
+            merged.global = ov.apply_to(&self.global);
+        }
+
+        // Contracts: map merge
+        if let Some(ref pc) = profile.contracts {
+            for (k, v) in pc {
+                merged.contracts.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Flag groups: map merge
+        if let Some(ref pf) = profile.flag_groups {
+            for (k, v) in pf {
+                merged.flag_groups.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Rules: append
+        if let Some(ref pr) = profile.rules {
+            merged.rules.extend(pr.clone());
+        }
+
+        // Roots: append unique, base-first order
+        if let Some(ref pr) = profile.roots {
+            for r in pr {
+                if !merged.roots.contains(r) {
+                    merged.roots.push(r.clone());
+                }
+            }
+        }
+
+        // Units: append unique, base-first order
+        if let Some(ref pu) = profile.units {
+            for u in pu {
+                if !merged.units.contains(u) {
+                    merged.units.push(u.clone());
+                }
+            }
+        }
+
+        // Merged config drops the profiles map — resolution is final
+        merged.profiles = Profiles::new();
+        merged
+    }
+
+    /// Check for duplicate SSH usernames across all profiles.
+    /// Returns Ok(()) if no duplicates found, or Err with the duplicate.
+    pub fn check_duplicate_users(&self) -> Result<(), crate::errors::GuardError> {
+        let mut seen: HashMap<&str, &str> = HashMap::new(); // user -> first_profile_name
+        for (pname, profile) in &self.profiles {
+            for u in &profile.users {
+                if let Some(&first) = seen.get(u.as_str()) {
+                    return Err(crate::errors::GuardError::Config(format!(
+                        "duplicate user '{u}' in profiles '{first}' and '{pname}'"
+                    )));
+                }
+                seen.insert(u, pname);
+            }
+        }
         Ok(())
     }
 }
@@ -433,6 +547,7 @@ arg_style = "dos"
             }],
             roots: vec!["/data".into()],
             units: vec!["nginx".into(), "sshd".into()],
+            ..Default::default()
         };
 
         let toml_str = original.to_toml_string().unwrap();
@@ -507,8 +622,6 @@ action = { type = "show_help" }
                 max_tail_lines: 100,
                 default_tail_lines: 20,
             },
-            contracts: Contracts::new(),
-            flag_groups: FlagGroups::new(),
             rules: vec![Rule {
                 action: Action::Run {
                     binary: "/bin/ls".into(),
@@ -524,8 +637,7 @@ action = { type = "show_help" }
                 pre_args: vec![],
                 subcommands: vec![],
             }],
-            roots: vec![],
-            units: vec![],
+            ..Default::default()
         };
 
         // Write, then read back
@@ -573,11 +685,7 @@ audit_log = "/dev/null"
                 max_tail_lines: 10,
                 default_tail_lines: 5,
             },
-            contracts: Contracts::new(),
-            flag_groups: FlagGroups::new(),
-            rules: vec![],
-            roots: vec![],
-            units: vec![],
+            ..Default::default()
         };
         let s = cfg.to_toml_string().unwrap();
         assert!(s.contains("audit_log"));
@@ -619,5 +727,342 @@ args = ["{string}"]
         assert_eq!(rule.args, vec!["{string}"]);
         // No subcommands
         assert!(rule.subcommands.is_empty());
+    }
+
+    use crate::config::profile::Profile;
+
+    // ── Profile tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_config_with_profiles() {
+        let toml_str = r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice", "bob"]
+
+[profiles.admin.global]
+audit_log = "/admin/log"
+help_text = "admin help"
+
+[[profiles.admin.rules]]
+action = { type = "run", binary = "/usr/bin/extra", args = [] }
+
+[profiles.dev]
+users = ["charlie"]
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.profiles.len(), 2);
+
+        let admin = &cfg.profiles["admin"];
+        assert_eq!(admin.users, vec!["alice", "bob"]);
+        assert_eq!(
+            admin.global.as_ref().unwrap().audit_log.as_deref(),
+            Some("/admin/log")
+        );
+        assert!(admin.rules.is_some());
+        assert_eq!(admin.rules.as_ref().unwrap().len(), 1);
+
+        let dev = &cfg.profiles["dev"];
+        assert_eq!(dev.users, vec!["charlie"]);
+        assert!(dev.global.is_none());
+        assert!(dev.rules.is_none());
+    }
+
+    #[test]
+    fn test_resolve_for_user_no_match() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice"]
+"#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_for_user("bob").unwrap();
+        // No profile matches, should be equal to base
+        assert_eq!(resolved.rules.len(), 1);
+        assert!(resolved.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_for_user_single_match() {
+        let cfg: Config = toml::from_str(
+            r#"
+[global]
+audit_log = "/base/log"
+help_text = "base help"
+
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice"]
+
+[profiles.admin.global]
+audit_log = "/admin/log"
+
+[[profiles.admin.rules]]
+action = { type = "run", binary = "/usr/bin/admintool", args = [] }
+"#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_for_user("alice").unwrap();
+        // Global: audit_log overridden, help_text inherits base
+        assert_eq!(resolved.global.audit_log, "/admin/log");
+        assert_eq!(resolved.global.help_text, "base help");
+        // Rules: base + profile appended
+        assert_eq!(resolved.rules.len(), 2);
+        assert!(matches!(resolved.rules[0].action, Action::ShowHelp));
+        assert!(matches!(resolved.rules[1].action, Action::Run { .. }));
+        // profiles map is empty in resolved
+        assert!(resolved.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_for_user_multiple_match_error() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice"]
+
+[profiles.dev]
+users = ["alice"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.resolve_for_user("alice").unwrap_err();
+        assert!(
+            err.to_string().contains("matches multiple profiles"),
+            "expected multiple profile error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_merge_profile_global_override() {
+        let base: Config = toml::from_str(
+            r#"
+[global]
+audit_log = "/base/log"
+help_text = "base help"
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile: Profile = toml::from_str(
+            r#"
+users = ["alice"]
+[global]
+audit_log = "/admin/log"
+"#,
+        )
+        .unwrap();
+
+        let merged = base.merge_profile(&profile);
+        assert_eq!(merged.global.audit_log, "/admin/log");
+        assert_eq!(merged.global.help_text, "base help");
+        assert_eq!(merged.rules.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_profile_rule_append() {
+        let base: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile = Profile {
+            users: vec!["bob".into()],
+            rules: Some(vec![Rule {
+                action: Action::Run {
+                    binary: "/usr/bin/tool".into(),
+                    args: vec![],
+                    timeout: Duration { millis: 5000 },
+                },
+                command: Some("tool".into()),
+                implicit_symlinks: true,
+                arg_style: ArgStyle::GnuLong,
+                flag_groups: vec![],
+                flags: vec![],
+                args: vec![],
+                pre_args: vec![],
+                subcommands: vec![],
+            }]),
+            ..Default::default()
+        };
+
+        let merged = base.merge_profile(&profile);
+        assert_eq!(merged.rules.len(), 2);
+        assert!(matches!(merged.rules[0].action, Action::ShowHelp));
+        assert_eq!(merged.rules[1].command_name(), Some("tool"));
+    }
+
+    #[test]
+    fn test_merge_profile_contracts_map_merge() {
+        let base: Config = toml::from_str(
+            r#"
+[contracts.port]
+type = "int_range"
+min = 1024
+max = 65535
+
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile: Profile = toml::from_str(
+            r#"
+users = ["bob"]
+[contracts.port]
+type = "int_range"
+min = 1
+max = 9999
+"#,
+        )
+        .unwrap();
+
+        let merged = base.merge_profile(&profile);
+        assert_eq!(merged.contracts.len(), 1);
+        match &merged.contracts["port"] {
+            Contract::IntRange { min, max } => {
+                assert_eq!(*min, 1); // profile overrides base
+                assert_eq!(*max, 9999);
+            }
+            _ => panic!("expected IntRange"),
+        }
+    }
+
+    #[test]
+    fn test_merge_profile_roots_append_unique() {
+        let base: Config = toml::from_str(
+            r#"
+roots = ["/base", "/common"]
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile: Profile = toml::from_str(
+            r#"
+users = ["bob"]
+roots = ["/common", "/profile"]
+"#,
+        )
+        .unwrap();
+
+        let merged = base.merge_profile(&profile);
+        assert_eq!(merged.roots, vec!["/base", "/common", "/profile"]);
+    }
+
+    #[test]
+    fn test_merge_profile_units_append_unique() {
+        let base: Config = toml::from_str(
+            r#"
+units = ["nginx", "sshd"]
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile: Profile = toml::from_str(
+            r#"
+users = ["bob"]
+units = ["sshd", "httpd"]
+"#,
+        )
+        .unwrap();
+
+        let merged = base.merge_profile(&profile);
+        assert_eq!(merged.units, vec!["nginx", "sshd", "httpd"]);
+    }
+
+    #[test]
+    fn test_check_duplicate_users_no_dups() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice", "bob"]
+
+[profiles.dev]
+users = ["charlie"]
+"#,
+        )
+        .unwrap();
+        assert!(cfg.check_duplicate_users().is_ok());
+    }
+
+    #[test]
+    fn test_check_duplicate_users_finds_dups() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice", "bob"]
+
+[profiles.dev]
+users = ["bob", "charlie"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.check_duplicate_users().unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate user"),
+            "expected duplicate error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_config_round_trip_with_profiles() {
+        let original = Config {
+            global: Global {
+                audit_log: "/tmp/profile_test.log".into(),
+                ..Global::default()
+            },
+            profiles: {
+                let mut p = Profiles::new();
+                p.insert(
+                    "admin".into(),
+                    Profile {
+                        users: vec!["admin".into()],
+                        global: None,
+                        contracts: None,
+                        flag_groups: None,
+                        rules: None,
+                        roots: None,
+                        units: None,
+                    },
+                );
+                p
+            },
+            ..Default::default()
+        };
+
+        let toml_str = original.to_toml_string().unwrap();
+        let deserialized: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(deserialized.profiles.len(), 1);
+        assert_eq!(
+            deserialized.profiles["admin"].users,
+            vec!["admin".to_string()]
+        );
     }
 }

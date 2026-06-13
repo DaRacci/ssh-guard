@@ -1,6 +1,6 @@
 use crate::errors::{GuardError, Result};
 use serde::{Deserialize, Serialize};
-use std::{fmt::Result as FmtResult, os::raw, result::Result as StdResult};
+use std::{fmt::Result as FmtResult, result::Result as StdResult};
 
 const DEFAULT_DURATION_MS: u64 = 5000;
 

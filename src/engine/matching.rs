@@ -422,7 +422,7 @@ mod tests {
     use super::*;
     use crate::config::arg::ArgStyle;
     use crate::config::{
-        Config, action::Action, contract::Contract, duration::Duration, global::Global, rule::Rule,
+        Config, action::Action, contract::Contract, duration::Duration, rule::Rule,
         subcommand::Subcommand,
     };
     use crate::errors::GuardError;
@@ -430,7 +430,6 @@ mod tests {
 
     fn make_config() -> Config {
         Config {
-            global: Global::default(),
             contracts: {
                 let mut c = HashMap::new();
                 c.insert(
@@ -534,6 +533,7 @@ mod tests {
             ],
             roots: vec!["/var/log".into()],
             units: vec!["sshd.service".into()],
+            ..Default::default()
         }
     }
 

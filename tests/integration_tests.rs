@@ -68,6 +68,7 @@ fn test_full_config_round_trip_via_file() {
         ],
         roots: vec!["/var/log".into()],
         units: vec!["sshd.service".into()],
+        ..Default::default()
     };
 
     // Write to temp file
@@ -110,9 +111,6 @@ fn test_full_config_round_trip_via_file() {
 fn test_full_config_round_trip_via_toml_string() {
     // Programmatic -> TOML string -> parse -> verify
     let cfg = config::Config {
-        global: Default::default(),
-        contracts: HashMap::new(),
-        flag_groups: HashMap::new(),
         rules: vec![Rule {
             action: Action::Run {
                 binary: "/bin/echo".into(),
@@ -128,8 +126,7 @@ fn test_full_config_round_trip_via_toml_string() {
             pre_args: vec![],
             subcommands: vec![],
         }],
-        roots: vec![],
-        units: vec![],
+        ..Default::default()
     };
 
     let toml_str = cfg.to_toml_string().unwrap();

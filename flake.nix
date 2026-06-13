@@ -30,7 +30,10 @@
         inputs.treefmt.flakeModule
       ];
 
-      flake.nixosModules.default = import ./nix/modules/nixos/ssh-guard.nix { inherit self; };
+      flake.nixosModules = {
+        default = import ./nix/modules/nixos/ssh-guard.nix { inherit self; };
+        ssh-guard = import ./nix/modules/nixos/ssh-guard.nix { inherit self; };
+      };
 
       systems = [
         "x86_64-linux"

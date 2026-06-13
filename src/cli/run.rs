@@ -2,27 +2,31 @@ use crate::{actions, audit::AuditEvent, config::Config, engine, errors::GuardErr
 
 pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
     let cfg = Config::from_file(config_path)?;
-    logging::init(&cfg.global.log_tag)?;
+    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
+
+    // Resolve effective config for this user (profile-aware)
+    let effective = cfg.resolve_for_user(&user)?;
+    let effective_global = effective.global.clone();
+
+    logging::init(&effective_global.log_tag)?;
 
     let raw = std::env::var("SSH_ORIGINAL_COMMAND").map_err(|_| GuardError::NoCommand)?;
 
-    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
-
     if raw.trim().is_empty() {
-        println!("{}", cfg.global.help_text);
+        println!("{}", effective_global.help_text);
         let event = AuditEvent::allowed(&user, "(empty - help shown)", "show_help");
-        let _ = event.write_to(&cfg.global.audit_log, &cfg.global.audit_format);
+        let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
         return Ok(0);
     }
 
     let args = shlex::split(&raw).ok_or_else(|| GuardError::ParseCommand(raw.clone()))?;
 
-    let match_result = match engine::match_command(&cfg, &args) {
+    let match_result = match engine::match_command(&effective, &args) {
         Ok(m) => m,
         Err(GuardError::NoMatch { failures, .. }) => {
             let failure_strings: Vec<String> = failures.iter().map(|f| f.to_string()).collect();
             let event = AuditEvent::denied(&user, &raw, "no matching rule", &failure_strings);
-            let _ = event.write_to(&cfg.global.audit_log, &cfg.global.audit_format);
+            let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
             return Err(Box::new(GuardError::NoMatch {
                 command: raw.clone(),
                 failures,
@@ -30,12 +34,12 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
         }
         Err(e) => {
             let event = AuditEvent::denied(&user, &raw, &e.to_string(), &[]);
-            let _ = event.write_to(&cfg.global.audit_log, &cfg.global.audit_format);
+            let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
             return Err(Box::new(e));
         }
     };
 
-    let rule = &cfg.rules[match_result.rule_index];
+    let rule = &effective.rules[match_result.rule_index];
 
     // Audit: allowed
     let detail = format!(
@@ -44,10 +48,10 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
         match_result.subcommand_path.join("/")
     );
     let event = AuditEvent::allowed(&user, &raw, &detail);
-    let _ = event.write_to(&cfg.global.audit_log, &cfg.global.audit_format);
+    let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
 
     let code = actions::execute(
-        &cfg,
+        &effective,
         rule,
         &match_result.subcommand_path,
         &match_result.captures,
@@ -129,6 +133,42 @@ action = {{ type = "show_help" }}
                 let result = run(&path);
                 // If syslog available, should return Ok(0) for empty command.
                 // Otherwise Err from logging::init.
+                if let Ok(code) = result {
+                    assert_eq!(code, 0);
+                }
+            });
+        });
+    }
+
+    /// Profile resolution: USER matches a profile → effective config used.
+    /// This test uses a config with profiles and an empty-command path.
+    #[test]
+    fn test_run_with_profile_matching_help() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[global]
+audit_log = "/dev/null"
+log_tag = "ssh-guard-test"
+help_text = "base help"
+
+[[rules]]
+action = {{ type = "show_help" }}
+
+[profiles.admin]
+users = ["admin_user"]
+
+[profiles.admin.global]
+help_text = "admin help"
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        temp_env::with_var("USER", Some("admin_user"), || {
+            temp_env::with_var("SSH_ORIGINAL_COMMAND", Some(""), || {
+                let result = run(&path);
                 if let Ok(code) = result {
                     assert_eq!(code, 0);
                 }

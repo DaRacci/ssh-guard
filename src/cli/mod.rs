@@ -26,6 +26,10 @@ pub enum Command {
         /// The command to add, e.g. "journalctl --since yesterday -n 10"
         #[arg(long)]
         cmd: String,
+        /// Target profile name (optional). If omitted, modifies base config.
+        /// Profile must already exist in the config file.
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Validate the config (checks binary paths, symlinks, syntax)
@@ -40,7 +44,11 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
 
     match &cli.command {
         Command::Run { config } => run::run(config),
-        Command::AddRule { config, cmd } => merge::add_rule(config, cmd)
+        Command::AddRule {
+            config,
+            cmd,
+            profile,
+        } => merge::add_rule(config, cmd, profile.as_deref())
             .map(|_| 0)
             .map_err(|e| e.into()),
         Command::Validate { config } => validate::validate(config).map(|_| 0).map_err(|e| e.into()),
@@ -76,9 +84,41 @@ mod tests {
         ])
         .unwrap();
         match &cli.command {
-            Command::AddRule { config, cmd } => {
+            Command::AddRule {
+                config,
+                cmd,
+                profile,
+            } => {
                 assert_eq!(config, "/tmp/test-ssh-guard.toml");
                 assert_eq!(cmd, "journalctl -n 10");
+                assert!(profile.is_none());
+            }
+            _ => panic!("expected AddRule command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_add_rule_with_profile() {
+        let cli = Cli::try_parse_from(&[
+            "ssh-guard",
+            "add-rule",
+            "--config",
+            "/tmp/test-ssh-guard.toml",
+            "--cmd",
+            "journalctl -n 10",
+            "--profile",
+            "admin",
+        ])
+        .unwrap();
+        match &cli.command {
+            Command::AddRule {
+                config,
+                cmd,
+                profile,
+            } => {
+                assert_eq!(config, "/tmp/test-ssh-guard.toml");
+                assert_eq!(cmd, "journalctl -n 10");
+                assert_eq!(profile.as_deref(), Some("admin"));
             }
             _ => panic!("expected AddRule command"),
         }
@@ -110,7 +150,6 @@ mod tests {
 
     #[test]
     fn test_cli_run_dispatch_errors_on_bad_config() {
-        // Test dispatch match arm for Run
         let cmd = Command::Run {
             config: "/tmp/nonexistent-ssh-guard-config.toml".to_string(),
         };
@@ -131,9 +170,14 @@ mod tests {
         let cmd = Command::AddRule {
             config: "/tmp/nonexistent-ssh-guard-config.toml".to_string(),
             cmd: "ls".to_string(),
+            profile: None,
         };
         let result: Result<i32, Box<dyn std::error::Error>> = match &cmd {
-            Command::AddRule { config, cmd } => merge::add_rule(config, cmd)
+            Command::AddRule {
+                config,
+                cmd,
+                profile,
+            } => merge::add_rule(config, cmd, profile.as_deref())
                 .map(|_| 0)
                 .map_err(|e| e.into()),
             _ => unreachable!(),
