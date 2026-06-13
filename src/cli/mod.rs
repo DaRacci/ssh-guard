@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_cli_run_dispatch_errors_on_bad_config() {
-        // Test dispatch match arm for Run — delegates to run::run
+        // Test dispatch match arm for Run
         let cmd = Command::Run {
             config: "/tmp/nonexistent-ssh-guard-config.toml".to_string(),
         };

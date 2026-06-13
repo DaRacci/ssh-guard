@@ -120,11 +120,11 @@ implicit_symlinks = false
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
 
-        // /bin/sh is a symlink on NixOS — expect symlink error
+        // /bin/sh is a symlink on NixOS, so we expect symlink error
         // On other systems it may be a real file; handle gracefully
         match result {
             Ok(()) => {
-                // Not a symlink on this system — test passes vacuously
+                // Not a symlink on this system
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -317,7 +317,7 @@ implicit_symlinks = true
         );
     }
 
-    /// Deep symlink chain — 38 symlinks pointing to the next, ends at a real file.
+    /// Deep symlink chain, 38 symlinks pointing to the next, ends at a real file.
     /// Under MAXSYMLINKS (40), so both stat() and realpath() succeed.
     /// Validation should fail: it's a symlink with implicit_symlinks=false.
     #[test]
@@ -378,8 +378,8 @@ implicit_symlinks = false
 
     /// The `symlink_metadata` Err branch (L125-127) at the end of validate()
     /// is triggered when `path.exists()` returns true but `symlink_metadata()`
-    /// fails on that same path. This is a TOCTOU race condition in practice —
-    /// it requires the file to be deleted, permissions revoked, or filesystem
+    /// fails on that same path. This is a TOCTOU race condition in practice.
+    /// It requires the file to be deleted, permissions revoked, or filesystem
     /// error to occur between the two calls. Not reliably testable without
     /// race conditions or kernel-level fault injection.
     ///
@@ -393,7 +393,7 @@ implicit_symlinks = false
 
     #[test]
     fn test_validate_empty_rules() {
-        // rules field has #[serde(default)] — omitting it parses as empty vec
+        // rules field has #[serde(default)], omitting it parses as empty vec
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,

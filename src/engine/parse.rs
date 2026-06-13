@@ -1,7 +1,7 @@
 use super::types::{ArgPattern, TemplateType};
 
 pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
-    // Inline flag: "--flag={...}" — requires '=' before '{'
+    // Inline flag: "--flag={...}" - requires '=' before '{'
     if let Some(eq_pos) = raw.find("={") {
         if eq_pos > 0 && raw.ends_with('}') {
             let flag = &raw[..eq_pos];
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_parse_eq_no_brace() {
-        // raw has "=" but not "={" — literal
+        // raw has "=" but not "={"
         let p = parse_arg_pattern("--key=value");
         assert!(matches!(p, ArgPattern::Literal(_)));
     }

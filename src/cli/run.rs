@@ -10,7 +10,7 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
 
     if raw.trim().is_empty() {
         println!("{}", cfg.global.help_text);
-        let event = AuditEvent::allowed(&user, "(empty — help shown)", "show_help");
+        let event = AuditEvent::allowed(&user, "(empty - help shown)", "show_help");
         let _ = event.write_to(&cfg.global.audit_log, &cfg.global.audit_format);
         return Ok(0);
     }

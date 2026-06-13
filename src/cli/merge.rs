@@ -140,7 +140,7 @@ args = ["sshd"]
         assert_eq!(rule.subcommands[1].args, vec!["sshd"]);
     }
 
-    /// Flags only, no subcommand — value consumed as flag value.
+    /// Flags only, no subcommand value consumed as flag value.
     #[test]
     fn test_add_rule_no_subcommands_only_flags() {
         let (_dir, path) = minimal_config();
@@ -259,7 +259,7 @@ action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
 flags = ["--no-pager", "--since", "--full"]
 "#,
         );
-        // Call add_rule with journalctl — finds existing rule and triggers auto group
+        // Call add_rule with journalctl, it finds existing rule and triggers auto group
         add_rule(&path, "journalctl --since yesterday --no-pager").unwrap();
 
         let config = Config::from_file(&path).unwrap();

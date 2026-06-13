@@ -31,7 +31,7 @@ impl std::fmt::Display for MatchFailure {
         };
         write!(
             f,
-            "rule[{}]{}: token {} '{}' — {}",
+            "rule[{}]{}: token {} '{}' - {}",
             self.rule_index, path, self.at_token, self.token, self.reason
         )
     }
@@ -91,7 +91,7 @@ mod tests {
             reason: "unexpected token".into(),
         };
         let got = f.to_string();
-        assert_eq!(got, "rule[3]: token 1 'foo' — unexpected token");
+        assert_eq!(got, "rule[3]: token 1 'foo' - unexpected token");
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
         let got = f.to_string();
         assert_eq!(
             got,
-            "rule[0] (via git remote): token 2 'add' — not a valid subcommand"
+            "rule[0] (via git remote): token 2 'add' - not a valid subcommand"
         );
     }
 
@@ -120,7 +120,7 @@ mod tests {
             reason: "wrong flags".into(),
         };
         let got = f.to_string();
-        assert_eq!(got, "rule[1] (via status): token 0 'status' — wrong flags");
+        assert_eq!(got, "rule[1] (via status): token 0 'status' - wrong flags");
     }
 
     // ── GuardError Display ────────────────────────────────────────────

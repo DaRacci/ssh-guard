@@ -1133,7 +1133,7 @@ mod tests {
     #[test]
     fn test_rule_no_command() {
         let mut cfg = make_config();
-        // Rule with command=None and a subcommand — command_name() returns None,
+        // Rule with command=None and a subcommand, command_name() returns None,
         // so the command-name check is skipped (covers the None branch at match L73).
         // argv[0] matches the subcommand name.
         cfg.rules.push(Rule {
@@ -1212,7 +1212,7 @@ mod tests {
     fn test_consume_flags_dos_inline() {
         let mut cfg = make_config();
         // Dos-style inline flag consumption: /flag:value uses ':' as separator.
-        // Flag must be at the level where consume_flags runs — here, as a top-level
+        // Flag must be at the level where consume_flags runs here, as a top-level
         // flag before the subcommand. This covers the inline consumption in consume_flags (L153-154).
         cfg.rules.push(Rule {
             action: Action::ShowHelp,
@@ -1233,7 +1233,7 @@ mod tests {
                 subcommands: vec![],
             }],
         });
-        // /verbose:true before subcommand — consumed at top-level by consume_flags
+        // /verbose:true before subcommand - consumed at top-level by consume_flags
         let argv = vec![
             "dos-tool".into(),
             "/verbose:true".into(),
@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     fn test_walk_subcommands_token_not_found() {
         let cfg = make_config();
-        // "git bogus" — "bogus" is not a subcommand of git
+        // "git bogus" - "bogus" is not a subcommand of git
         let argv = vec!["git".into(), "bogus".into()];
         let err = match_command(&cfg, &argv).unwrap_err();
         match err {
@@ -1267,7 +1267,7 @@ mod tests {
         // Tests walk_subcommands_nested matching a nested subcommand and then
         // dispatching to match_remaining_args. Covers the deeper nesting path
         // in walk_subcommands_nested (L240-258).
-        // "git remote add my-remote" — remote->add is a nested subcommand with args [{string}]
+        // "git remote add my-remote" - remote->add is a nested subcommand with args [{string}]
         let cfg = make_config();
         let argv = vec![
             "git".into(),

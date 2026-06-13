@@ -546,7 +546,7 @@ action = { type = "show_help" }
 
     #[test]
     fn test_config_empty_rules() {
-        // rules has #[serde(default)] — no [[rules]] entries is ok, becomes empty vec
+        // rules has #[serde(default)], no [[rules]] entries is ok, becomes empty vec
         let toml_str = r#"
 [global]
 audit_log = "/dev/null"
@@ -562,7 +562,7 @@ audit_log = "/dev/null"
 
     #[test]
     fn test_to_toml_string_empty_config() {
-        // to_toml_string with default config — success path
+        // to_toml_string with default config
         let cfg = Config {
             global: Global {
                 audit_log: "/dev/null".into(),

@@ -27,7 +27,7 @@ mod tests {
         let result = init("ssh-guard-test");
         match result {
             Ok(()) => { /* syslog available */ }
-            Err(_) => { /* syslog not available — acceptable */ }
+            Err(_) => { /* syslog not available */ }
         }
     }
 }

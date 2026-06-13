@@ -93,7 +93,7 @@ impl AuditEvent {
     }
 }
 
-/// Get current time as ISO 8601 string (no external crate — manual formatting).
+/// Get current time as ISO 8601 string without relying on an external crate.
 pub(crate) fn chrono_now() -> String {
     // Use UNIX epoch + format manually to avoid chrono dependency.
     // Format: "2025-01-15T10:30:00Z"
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_audit_event_denied() {
-        let failures = vec!["rule[0]: token 2 '--bad' — unknown flag".into()];
+        let failures = vec!["rule[0]: token 2 '--bad' | unknown flag".into()];
         let event =
             AuditEvent::denied("ai-agent", "systemctl --bad", "no matching rule", &failures);
         let json = serde_json::to_string(&event).unwrap();
@@ -355,7 +355,7 @@ mod tests {
             "mallory",
             "rm -rf /",
             "dangerous command",
-            &["rule[0]: token 0 'rm' — blocked".into()],
+            &["rule[0]: token 0 'rm' - blocked".into()],
         );
         let fmt = AuditFormat::Logfmt;
         event.write_to(&path, &fmt).unwrap();

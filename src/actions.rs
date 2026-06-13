@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Instant;
@@ -98,7 +99,7 @@ fn build_command_argv(
         i += 1;
 
         if token == &subcommand_path[sub_level] {
-            // Routing token — auto-inject sub.name + pre_args
+            // Routing token - auto-inject sub.name + pre_args
             if let Some(sub) = find_sub_by_name(subs, &subcommand_path[sub_level]) {
                 argv.push(sub.name.clone());
                 argv.extend(sub.pre_args.clone());
@@ -106,7 +107,7 @@ fn build_command_argv(
             }
             sub_level += 1;
         } else {
-            // Regular token (flag, positional arg) — pass through
+            // Regular token (flag, positional arg), so pass through
             argv.push(token.clone());
         }
     }
@@ -131,6 +132,9 @@ fn action_run(
         .args(argv)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        // Put child in its own process group so we can kill the entire
+        // group (including grandchildren) on timeout instead of leaving orphans.
+        .process_group(0)
         .spawn()
         .map_err(|e| GuardError::Action(format!("cannot spawn '{resolved}': {e}")))?;
 
@@ -142,7 +146,10 @@ fn action_run(
             Ok(Some(status)) => return Ok(status.code().unwrap_or(1)),
             Ok(None) => {
                 if start.elapsed() > timeout_dur {
-                    let _ = child.kill();
+                    // Kill entire process group (children, grandchildren, etc.)
+                    // Negative PID targets the process group in kill(2).
+                    let pid = nix::unistd::Pid::from_raw(-(child.id() as i32));
+                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::SIGKILL);
                     let _ = child.wait();
                     return Err(GuardError::Action(format!(
                         "command '{binary}' timed out after {}ms",
@@ -1100,7 +1107,7 @@ mod tests {
 
     #[test]
     fn test_action_run_spawn_failure() {
-        // Use a directory as "binary" — exists but cannot be spawned as a process
+        // Use a directory as "binary" - exists but cannot be spawned as a process
         let dir = tempfile::tempdir().unwrap();
         let argv: Vec<String> = vec![];
         let result = action_run(
