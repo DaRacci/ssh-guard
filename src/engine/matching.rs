@@ -59,15 +59,28 @@ pub(crate) fn try_match_rule(
     let mut start = 0;
     if let Some(cmd) = rule.command_name() {
         if argv[0] != cmd {
-            record_failure(
-                failures,
-                rule_idx,
-                &[],
-                0,
-                &argv[0],
-                &format!("expected '{}'", cmd),
-            );
-            return Err(());
+            // Not a direct name match. Check if argv[0] resolves via symlink
+            // to the same real file as the rule's binary.
+            let symlink_match = rule.binary_path().and_then(|bin| {
+                let user_real = std::fs::canonicalize(&argv[0]).ok()?;
+                let rule_real = std::fs::canonicalize(bin).ok()?;
+                if user_real == rule_real {
+                    Some(())
+                } else {
+                    None
+                }
+            });
+            if symlink_match.is_none() {
+                record_failure(
+                    failures,
+                    rule_idx,
+                    &[],
+                    0,
+                    &argv[0],
+                    &format!("expected '{}'", cmd),
+                );
+                return Err(());
+            }
         }
         start = 1;
     }

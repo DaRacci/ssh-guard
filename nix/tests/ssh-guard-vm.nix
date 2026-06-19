@@ -16,14 +16,6 @@ let
     ssh-keygen -t ed25519 -N "" -f "$out/id_ed25519"
     chmod 644 "$out/id_ed25519.pub"
   '';
-
-  # Wrapper so ssh-guard can execute `echo` via a stable path.
-  # pkgs.coreutils/bin/echo is a symlink to multi-call coreutils binary;
-  # ssh-guard's implicit_symlinks resolves the symlink and drops argv[0]=echo,
-  # which breaks coreutils dispatch. writeShellScriptBin avoids that.
-  echoWrapper = pkgs.writeShellScriptBin "echo" ''
-    exec ${lib.getBin pkgs.coreutils}/bin/echo "$@"
-  '';
 in
 
 testers.runNixOSTest {
@@ -66,7 +58,7 @@ testers.runNixOSTest {
               args = [ "{string}" ];
               action = {
                 type = "run";
-                binary = "${lib.getBin echoWrapper}/bin/echo";
+                binary = "${lib.getBin pkgs.coreutils}/bin/echo";
                 args = [ ];
                 timeout = "5s";
               };

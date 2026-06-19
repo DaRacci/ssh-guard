@@ -128,13 +128,24 @@ fn action_run(
 ) -> Result<i32, GuardError> {
     let resolved = resolve_binary(binary, implicit_symlinks)?;
 
-    let mut child = std::process::Command::new(&resolved)
-        .args(argv)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        // Put child in its own process group so we can kill the entire
-        // group (including grandchildren) on timeout instead of leaving orphans.
-        .process_group(0)
+    // Preserve the original binary name as argv[0] so multi-call binaries
+    // (coreutils, busybox, etc.) dispatch to the correct subcommand.
+    let binary_name = Path::new(binary)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("ssh-guard-cmd")
+        .to_string();
+
+    let mut cmd = std::process::Command::new(&resolved);
+    cmd.arg0(binary_name);
+    cmd.args(argv);
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+    // Put child in its own process group so we can kill the entire
+    // group (including grandchildren) on timeout instead of leaving orphans.
+    cmd.process_group(0);
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| GuardError::Action(format!("cannot spawn '{resolved}': {e}")))?;
 

@@ -44,6 +44,14 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// Returns the binary path for Run actions, or None for other actions.
+    pub fn binary_path(&self) -> Option<&str> {
+        match &self.action {
+            Action::Run { binary, .. } => Some(binary.as_str()),
+            _ => None,
+        }
+    }
+
     /// Resolve the command name for this rule.
     /// Returns the explicit `command` field, or derives from binary filename for Run actions.
     pub fn command_name(&self) -> Option<&str> {
