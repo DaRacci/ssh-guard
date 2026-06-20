@@ -11,17 +11,14 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
 
     let mut errors: Vec<String> = Vec::new();
 
-    // Validate base rules
     validate_rules(&cfg.rules, "base", &mut errors);
 
-    // Validate profile rules
     for (pname, profile) in &cfg.profiles {
         if let Some(ref rules) = profile.rules {
             validate_rules(rules, &format!("profile '{pname}'"), &mut errors);
         }
     }
 
-    // Validate no duplicate SSH usernames across profiles
     if let Err(e) = cfg.check_duplicate_users() {
         errors.push(e.to_string());
     }
@@ -253,8 +250,7 @@ action = {{ type = "show_help" }}
         );
     }
 
-    /// Create a temp symlink targeting a real temp file, implicit_symlinks=false.
-    /// This hits the symlink check path (L24-29: symlink resolved).
+    /// Symlink to real target with implicit_symlinks=false should fail.
     #[test]
     fn test_validate_symlink_to_real_target_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -292,10 +288,7 @@ implicit_symlinks = false
         );
     }
 
-    /// Dangling symlink with implicit_symlinks=false.
-    /// The symlink exists on disk but points to nothing.
-    /// `exists()` follows the symlink → target missing → "does not exist" error
-    /// (not the symlink check path, since exists() returns false first).
+    /// Dangling symlink: exists() returns false first → "does not exist" error.
     #[test]
     fn test_validate_dangling_symlink_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -322,7 +315,6 @@ implicit_symlinks = false
         );
     }
 
-    /// Symlink with implicit_symlinks=true → should pass validation.
     #[test]
     fn test_validate_symlink_with_implicit_enabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -351,21 +343,15 @@ implicit_symlinks = true
         );
     }
 
-    /// Deep symlink chain, 38 symlinks pointing to the next, ends at a real file.
-    /// Under MAXSYMLINKS (40), so both stat() and realpath() succeed.
-    /// Validation should fail: it's a symlink with implicit_symlinks=false.
+    /// 38-symlink chain under MAXSYMLINKS (40). Fails because implicit_symlinks=false.
     #[test]
     fn test_validate_deep_symlink_chain() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Create a real target file
         let target_path = dir.path().join("level_40");
         std::fs::write(&target_path, "#!/bin/sh\necho hi").unwrap();
         std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        // Create a chain of 38 symlinks: level_0 -> level_1 -> ... -> level_38 -> level_40
-        // 38 symlinks + 1 resolution for the final target = 39 symlink traversals
-        // Under MAXSYMLINKS (40), so stat() and realpath() should both succeed.
         let max_links = 38usize;
         for i in (0..max_links).rev() {
             let prev = if i == max_links - 1 {
@@ -395,9 +381,6 @@ implicit_symlinks = false
         std::fs::write(&config_path, &toml).unwrap();
 
         let result = validate(config_path.to_str().unwrap());
-        // On Linux, stat() follows up to MAXSYMLINKS (40) symlinks.
-        // With 38 links + target, both stat() and realpath() should succeed.
-        // The symlink IS a symlink, so validation fails with symlink error.
         assert!(result.is_err(), "expected Err for symlink chain");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -410,20 +393,8 @@ implicit_symlinks = false
         );
     }
 
-    /// The `symlink_metadata` Err branch (L125-127) at the end of validate()
-    /// is triggered when `path.exists()` returns true but `symlink_metadata()`
-    /// fails on that same path. This is a TOCTOU race condition in practice.
-    /// It requires the file to be deleted, permissions revoked, or filesystem
-    /// error to occur between the two calls. Not reliably testable without
-    /// race conditions or kernel-level fault injection.
-    ///
-    /// Similarly, the `canonicalize` Err branch (L31-37) inside the symlink
-    /// check is reached when `path.exists()` and `symlink_metadata()` both
-    /// succeed (symlink exists, target exists), but `canonicalize()` fails.
-    /// This also requires a TOCTOU race or a path resolution difference
-    /// between stat() and realpath(), which is kernel-dependent.
-    ///
-    /// These branches exist for correctness in edge-case failure scenarios.
+    /// TOCTOU race-dependent branches (symlink_metadata and canonicalize)
+    /// are not reliably testable without fault injection.
 
     #[test]
     fn test_validate_empty_rules() {
@@ -441,7 +412,6 @@ audit_log = "/dev/null"
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
     }
 
-    /// Validate with a profile that has rules: base missing binary + profile missing binary.
     #[test]
     fn test_validate_profile_rules_missing_binary() {
         let mut tmp = NamedTempFile::new().unwrap();
@@ -471,7 +441,6 @@ implicit_symlinks = true
         );
     }
 
-    /// Validate with duplicate SSH usernames across profiles → error.
     #[test]
     fn test_validate_duplicate_users() {
         let mut tmp = NamedTempFile::new().unwrap();
@@ -499,7 +468,6 @@ users = ["bob", "charlie"]
         );
     }
 
-    /// Validate with valid profile rules (all binaries exist) → OK.
     #[test]
     fn test_validate_valid_profile_rules() {
         let mut tmp = NamedTempFile::new().unwrap();

@@ -84,7 +84,6 @@ impl Config {
         }
 
         let Some((_, profile)) = matching.into_iter().next() else {
-            // No profile matches — use base config unchanged, strip profiles
             let mut base = self.clone();
             base.profiles = Profiles::new();
             return Ok(base);
@@ -106,31 +105,26 @@ impl Config {
     pub fn merge_profile(&self, profile: &Profile) -> Config {
         let mut merged = self.clone();
 
-        // Global override
         if let Some(ref ov) = profile.global {
             merged.global = ov.apply_to(&self.global);
         }
 
-        // Contracts: map merge
         if let Some(ref pc) = profile.contracts {
             for (k, v) in pc {
                 merged.contracts.insert(k.clone(), v.clone());
             }
         }
 
-        // Flag groups: map merge
         if let Some(ref pf) = profile.flag_groups {
             for (k, v) in pf {
                 merged.flag_groups.insert(k.clone(), v.clone());
             }
         }
 
-        // Rules: append
         if let Some(ref pr) = profile.rules {
             merged.rules.extend(pr.clone());
         }
 
-        // Roots: append unique, base-first order
         if let Some(ref pr) = profile.roots {
             for r in pr {
                 if !merged.roots.contains(r) {
@@ -139,7 +133,6 @@ impl Config {
             }
         }
 
-        // Units: append unique, base-first order
         if let Some(ref pu) = profile.units {
             for u in pu {
                 if !merged.units.contains(u) {
@@ -148,7 +141,6 @@ impl Config {
             }
         }
 
-        // Merged config drops the profiles map — resolution is final
         merged.profiles = Profiles::new();
         merged
     }
@@ -230,31 +222,25 @@ help_text = "allowed: git status, git log, git remote add"
         assert!(!rule.implicit_symlinks);
         assert_eq!(rule.subcommands.len(), 3);
 
-        // status subcommand
         let status = &rule.subcommands[0];
         assert_eq!(status.name, "status");
         assert_eq!(status.args, vec!["--porcelain", "--short", "{string}"]);
 
-        // log subcommand
         let log = &rule.subcommands[1];
         assert_eq!(log.name, "log");
         assert_eq!(log.flags, vec!["--oneline"]);
         assert_eq!(log.flag_groups, vec!["git-common"]);
 
-        // remote → add nested
         let remote = &rule.subcommands[2];
         assert_eq!(remote.name, "remote");
         assert_eq!(remote.subcommands.len(), 1);
         assert_eq!(remote.subcommands[0].name, "add");
         assert_eq!(remote.subcommands[0].args, vec!["{gh_remote}"]);
 
-        // flag groups
         assert_eq!(cfg.flag_groups["git-common"], vec!["--no-pager"]);
 
-        // contracts
         assert_eq!(cfg.contracts.len(), 0);
 
-        // global
         assert_eq!(cfg.global.audit_log, "/tmp/audit.log");
         assert_eq!(
             cfg.global.help_text,
@@ -404,7 +390,6 @@ action = { type = "show_help" }
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 6);
 
-        // TailFile has explicit default_lines
         match &cfg.rules[2].action {
             Action::TailFile { default_lines, .. } => {
                 assert_eq!(*default_lines, 50);
@@ -431,16 +416,13 @@ flag_groups = ["fmt"]
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
 
-        // flag groups at top level
         assert_eq!(cfg.flag_groups["net"], vec!["--host", "-p"]);
         assert_eq!(cfg.flag_groups["fmt"], vec!["--format", "-f"]);
 
-        // rule references flag_groups
         let rule = &cfg.rules[0];
         assert_eq!(rule.flag_groups, vec!["net"]);
         assert_eq!(rule.flags, vec!["--verbose"]);
 
-        // subcommand references flag_groups
         assert_eq!(rule.subcommands[0].flag_groups, vec!["fmt"]);
     }
 
@@ -453,7 +435,6 @@ implicit_symlinks = false
 
 [[rules]]
 action = { type = "read_file", path_capture = "{file}", root_set = "data" }
-# implicit_symlinks not set → default true
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 2);
@@ -478,10 +459,8 @@ args = ["{unit}.service"]
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
 
-        // contract present
         assert!(cfg.contracts.contains_key("unit"));
 
-        // arg stored as-is with ".service" suffix
         let rule = &cfg.rules[0];
         assert_eq!(rule.subcommands[0].args, vec!["{unit}.service"]);
     }
@@ -553,7 +532,6 @@ arg_style = "dos"
         let toml_str = original.to_toml_string().unwrap();
         let deserialized: Config = toml::from_str(&toml_str).unwrap();
 
-        // Compare key fields
         assert_eq!(deserialized.global.audit_log, "/tmp/roundtrip.log");
         assert_eq!(deserialized.global.audit_format, AuditFormat::Logfmt);
         assert_eq!(deserialized.global.help_text, "round trip test");
@@ -640,7 +618,6 @@ action = { type = "show_help" }
             ..Default::default()
         };
 
-        // Write, then read back
         cfg.write_to_file(&path).unwrap();
         let read_back = Config::from_file(&path).unwrap();
 
@@ -652,7 +629,6 @@ action = { type = "show_help" }
             _ => panic!("expected Run"),
         }
 
-        // Cleanup
         drop(tmp);
     }
 
@@ -674,7 +650,6 @@ audit_log = "/dev/null"
 
     #[test]
     fn test_to_toml_string_empty_config() {
-        // to_toml_string with default config
         let cfg = Config {
             global: Global {
                 audit_log: "/dev/null".into(),
@@ -725,13 +700,10 @@ args = ["{string}"]
         assert_eq!(rule.flags, vec!["--dry-run", "--verbose"]);
         assert_eq!(rule.pre_args, vec!["--config", "/etc/deploy.conf"]);
         assert_eq!(rule.args, vec!["{string}"]);
-        // No subcommands
         assert!(rule.subcommands.is_empty());
     }
 
     use crate::config::profile::Profile;
-
-    // ── Profile tests ───────────────────────────────────────────────────
 
     #[test]
     fn test_parse_config_with_profiles() {
@@ -783,7 +755,6 @@ users = ["alice"]
         )
         .unwrap();
         let resolved = cfg.resolve_for_user("bob").unwrap();
-        // No profile matches, should be equal to base
         assert_eq!(resolved.rules.len(), 1);
         assert!(resolved.profiles.is_empty());
     }
@@ -811,14 +782,11 @@ action = { type = "run", binary = "/usr/bin/admintool", args = [] }
         )
         .unwrap();
         let resolved = cfg.resolve_for_user("alice").unwrap();
-        // Global: audit_log overridden, help_text inherits base
         assert_eq!(resolved.global.audit_log, "/admin/log");
         assert_eq!(resolved.global.help_text, "base help");
-        // Rules: base + profile appended
         assert_eq!(resolved.rules.len(), 2);
         assert!(matches!(resolved.rules[0].action, Action::ShowHelp));
         assert!(matches!(resolved.rules[1].action, Action::Run { .. }));
-        // profiles map is empty in resolved
         assert!(resolved.profiles.is_empty());
     }
 
@@ -938,7 +906,7 @@ max = 9999
         assert_eq!(merged.contracts.len(), 1);
         match &merged.contracts["port"] {
             Contract::IntRange { min, max } => {
-                assert_eq!(*min, 1); // profile overrides base
+                assert_eq!(*min, 1);
                 assert_eq!(*max, 9999);
             }
             _ => panic!("expected IntRange"),

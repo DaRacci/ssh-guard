@@ -34,31 +34,22 @@ let
     then self.packages.${pkgs.system}.default or null
     else null;
 
-  # For each profile, compute effective usernames
-  # (list from `users` + attrNames from `managedUsers`)
   profileEffectiveUsers = mapAttrs' (
     pName: p:
     nameValuePair pName (p.users ++ attrNames p.managedUsers)
   ) cfg.profiles;
 
-  # All usernames flat for duplicate detection
   allUsernames = lib.concatLists (attrValues profileEffectiveUsers);
 
-  # Detect usernames bound to more than one profile
   userCounts = builtins.foldl' (
     acc: u: acc // { ${u} = (acc.${u} or 0) + 1; }
   ) { } allUsernames;
   duplicateUsers = filterAttrs (_: c: c > 1) userCounts;
 
-  # Profiles with zero effective usernames
-  emptyProfiles = filterAttrs (
-    pName: users: users == [ ]
-  ) profileEffectiveUsers;
+  emptyProfiles = filterAttrs (pName: users: users == [ ]) profileEffectiveUsers;
 
-  # Profiles with `users` in settings (forbidden — module auto-generates it)
   profilesWithUsersInSettings = filterAttrs (_: p: p.settings ? users) cfg.profiles;
 
-  # Build profile TOML entry for a single profile
   mkProfileEntry = pName: p:
     let
       effectiveUsers = profileEffectiveUsers.${pName};
@@ -66,21 +57,16 @@ let
     in
     usersAttr // p.settings;
 
-  # Nix attrset for the `profiles` key (empty if no profiles)
   profilesAttr = optionalAttrs (cfg.profiles != { }) {
     profiles = mapAttrs' (
       pName: p: nameValuePair pName (mkProfileEntry pName p)
     ) cfg.profiles;
   };
 
-  # Final single config to generate
-  # cfg.settings is asserted to NOT contain `profiles`
   finalConfig = cfg.settings // profilesAttr;
 
-  # Profiles with non-empty user list (for sshd Match blocks)
   profilesWithUsers = filterAttrs (_: users: users != [ ]) profileEffectiveUsers;
 
-  # Build Match User block for sshd_config — all point at same config file
   sshdMatchBlock =
     pName: users:
     let
@@ -95,7 +81,7 @@ let
 in
 {
   options.services.ssh-guard = {
-    enable = mkEnableOption "ssh-guard — restricted SSH command guard";
+    enable = mkEnableOption "ssh-guard - restricted SSH command guard";
 
     package = mkOption {
       type = types.nullOr types.package;
@@ -117,7 +103,7 @@ in
         defined under {option}`profiles.<name>.settings` are merged into
         each profile entry inside the same file.
 
-        Must not define a `profiles` key — profiles are declared via
+        Must not define a `profiles` key - profiles are declared via
         {option}`profiles` option instead.
       '';
       example = lib.literalExpression ''
@@ -203,7 +189,7 @@ in
                   generated config file.  Values here override identically-named
                   keys in the base {option}`settings`.
 
-                  Do not set `users` here — it is auto-generated from
+                  Do not set `users` here - it is auto-generated from
                   {option}`users` and {option}`managedUsers`.
                 '';
               };

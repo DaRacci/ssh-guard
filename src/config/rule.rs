@@ -12,8 +12,6 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
-    /// If false, the binary path MUST resolve to a real file (not a symlink).
-    /// If true, symlinks are followed and the resolved target is used.
     #[serde(default = "default_implicit")]
     pub implicit_symlinks: bool,
 
@@ -25,7 +23,6 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flag_groups: Vec<String>,
 
-    /// Inline flags allowed at the top level.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<String>,
 
@@ -38,13 +35,11 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_args: Vec<String>,
 
-    /// Subcommands form the command tree.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subcommands: Vec<Subcommand>,
 }
 
 impl Rule {
-    /// Returns the binary path for Run actions, or None for other actions.
     pub fn binary_path(&self) -> Option<&str> {
         match &self.action {
             Action::Run { binary, .. } => Some(binary.as_str()),
@@ -153,7 +148,6 @@ mod tests {
 
     #[test]
     fn test_command_name_binary_no_filename() {
-        // binary = "/" has no filename component
         let rule = Rule {
             action: Action::Run {
                 binary: "/".into(),

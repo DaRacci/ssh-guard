@@ -13,7 +13,7 @@ pub(crate) enum TemplateType {
 pub(crate) enum ArgPattern {
     Literal(String),
     Template(TemplateType),
-    /// Template with literal prefix and/or suffix, e.g. "--{unit}", "{unit}.service", "--{unit}.service"
+    /// Template with literal prefix and/or suffix
     TemplateContext {
         prefix: Option<String>,
         template: TemplateType,

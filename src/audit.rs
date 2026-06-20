@@ -95,19 +95,14 @@ impl AuditEvent {
 
 /// Get current time as ISO 8601 string without relying on an external crate.
 pub(crate) fn chrono_now() -> String {
-    // Use UNIX epoch + format manually to avoid chrono dependency.
-    // Format: "2025-01-15T10:30:00Z"
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = dur.as_secs();
-    // Simple: just format seconds since epoch. A real impl would parse to date.
-    // For dependency-free approach, use the built-in way.
     format_unix_time(secs)
 }
 
 pub(crate) fn format_unix_time(secs: u64) -> String {
-    // Days since epoch
     let days = secs / 86400;
     let time_of_day = secs % 86400;
     let hours = time_of_day / 3600;
@@ -199,7 +194,7 @@ mod tests {
         assert_eq!(ts.len(), 20); // "YYYY-MM-DDTHH:MM:SSZ"
     }
 
-    // ── format_unix_time ────────────────────────────────────────────
+    // -- format_unix_time ---------------------------------------------------
 
     #[test]
     fn test_format_unix_time_epoch() {
@@ -247,7 +242,7 @@ mod tests {
         assert_eq!(format_unix_time(951696000), "2000-02-28T00:00:00Z");
     }
 
-    // ── is_leap ─────────────────────────────────────────────────────
+    // -- is_leap --------------------------------------------------------------
 
     #[test]
     fn test_is_leap_2000() {
@@ -291,7 +286,7 @@ mod tests {
         assert!(!is_leap(2100));
     }
 
-    // ── denied with empty failures ──────────────────────────────────
+    // -- denied with empty failures -----------------------------------------
 
     #[test]
     fn test_denied_empty_failures_no_failures_field() {
@@ -319,7 +314,7 @@ mod tests {
         assert!(!line.contains("failures"));
     }
 
-    // ── write_to (actual file I/O) ──────────────────────────────────
+    // -- write_to (actual file I/O) -----------------------------------------
 
     #[test]
     fn test_write_to_json() {

@@ -84,7 +84,7 @@ Import module:
 
 ## Notes
 
-- **No `enable` per profile** — profile exists if declared.
+- **No `enable` per profile** - profile exists if declared.
 - **User account extras** (group, shell, uid, extraGroups, home, packages) are intentionally **not** exposed by this module. Use `users.users.<name>` directly.
 - Module sets **only** `openssh.authorizedKeys.*` on managed user entries. No `isNormalUser`, `home`, `group`, etc.
 - OpenSSH must be enabled (`services.openssh.enable = true`) when any profiles are defined.
@@ -93,9 +93,9 @@ Import module:
 
 ### Purpose of `nix/` subtree
 
-Contains NixOS module definition (`nix/modules/nixos/ssh-guard.nix`), VM integration test (`nix/tests/ssh-guard-vm.nix`), and this README. The test verifies `ssh-guard` works end-to-end inside a NixOS VM with OpenSSH — not just unit-level Rust behavior.
+Contains NixOS module definition (`nix/modules/nixos/ssh-guard.nix`), VM integration test (`nix/tests/ssh-guard-vm.nix`), and this README. The test verifies `ssh-guard` works end-to-end inside a NixOS VM with OpenSSH - not just unit-level Rust behavior.
 
-### VM test — what it validates
+### VM test - what it validates
 
 Test fixture at `nix/tests/ssh-guard-vm.nix` spins up a NixOS VM with:
 
@@ -136,8 +136,8 @@ nix build .#packages.$(nix eval --raw --impure --expr 'builtins.currentSystem').
 
 ### If the test fails
 
-1. **Check test definition** — `nix/tests/ssh-guard-vm.nix`. Look for assertion logic, SSH key setup, or profile misconfig.
-2. **Inspect the VM** — Re-run with `nix run` instead of `nix build` to get an interactive shell, or add `interactive = true;` to the test node.
-3. **Check audit log path** — Default location set in the test's `services.ssh-guard.settings.global.audit_log`. Verify event entries are present.
-4. **Check OpenSSH config** — The `ForceCommand` line in the VM's `/etc/ssh/sshd_config` should point to the correct `ssh-guard` binary and config path.
-5. **Run Rust test suite** — `cargo test` for unit/integration tests independent of NixOS.
+1. **Check test definition** - `nix/tests/ssh-guard-vm.nix`. Look for assertion logic, SSH key setup, or profile misconfig.
+2. **Inspect the VM** - Re-run with `nix run` instead of `nix build` to get an interactive shell, or add `interactive = true;` to the test node.
+3. **Check audit log path** - Default location set in the test's `services.ssh-guard.settings.global.audit_log`. Verify event entries are present.
+4. **Check OpenSSH config** - The `ForceCommand` line in the VM's `/etc/ssh/sshd_config` should point to the correct `ssh-guard` binary and config path.
+5. **Run Rust test suite** - `cargo test` for unit/integration tests independent of NixOS.

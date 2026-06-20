@@ -75,7 +75,6 @@ fn build_command_argv(
 ) -> Vec<String> {
     let mut argv: Vec<String> = Vec::new();
 
-    // 1. Static pre-args from the action
     if let Action::Run { args, .. } = &rule.action {
         argv.extend(args.clone());
     }
@@ -107,12 +106,10 @@ fn build_command_argv(
             }
             sub_level += 1;
         } else {
-            // Regular token (flag, positional arg), so pass through
             argv.push(token.clone());
         }
     }
 
-    // 3. Append remaining user argv after last subcommand
     if i < user_argv.len() {
         argv.extend_from_slice(&user_argv[i..]);
     }
@@ -841,7 +838,6 @@ mod tests {
         );
     }
 
-    /// When command_name() returns None, the cmd-skip block is skipped.
     #[test]
     fn test_build_command_no_command_name() {
         // ReadFile action with no explicit command name -> command_name() returns None
@@ -1314,7 +1310,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Stat a named pipe (fifo) -> "other" file type arm.
     #[test]
     fn test_action_stat_path_other_fifo() {
         let dir = tempfile::tempdir().unwrap();

@@ -57,10 +57,6 @@ binary = "/run/current-system/sw/bin/journalctl"
 args = []
 timeout = "5000ms"
 
-# ── Profile example ────────────────────────────────────────────────
-# Profiles extend the base (global) config for specific SSH users.
-# Selected at runtime via $USER when `ssh-guard run` executes.
-
 [profiles.admin]
 users = ["root", "admin"]
 

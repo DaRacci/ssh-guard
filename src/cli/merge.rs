@@ -25,14 +25,11 @@ pub fn add_rule(
 
     match profile {
         Some(profile_name) => {
-            // Target a named profile — must already exist
             let profile_entry = config.profiles.get_mut(profile_name).ok_or_else(|| {
                 GuardError::Config(format!("profile '{profile_name}' does not exist"))
             })?;
 
-            // Ensure profile.rules exists
             let rules = profile_entry.rules.get_or_insert_with(Vec::new);
-            // Ensure profile-local flag_groups exists (for auto-created groups)
             let profile_fg = profile_entry
                 .flag_groups
                 .get_or_insert_with(|| std::collections::HashMap::new());
@@ -42,7 +39,6 @@ pub fn add_rule(
             auto_create_flag_groups_in_rules(profile_fg, rules, binary_name);
         }
         None => {
-            // Base config (existing behavior)
             let rule = find_or_create_rule(&mut config.rules, binary_name);
             walk_and_merge(rule, &argv[1..]);
             auto_create_flag_groups(&mut config, binary_name);
@@ -81,7 +77,6 @@ action = { type = "show_help" }
         })
     }
 
-    /// Basic: add first rule to empty config.
     #[test]
     fn test_add_first_rule() {
         let (_dir, path) = minimal_config();
@@ -95,7 +90,6 @@ action = { type = "show_help" }
         assert!(rule.args.is_empty());
     }
 
-    /// Basic: rule with subcommand and positional arg.
     #[test]
     fn test_add_rule_with_subcommand() {
         let (_dir, path) = minimal_config();
@@ -110,7 +104,6 @@ action = { type = "show_help" }
         assert!(rule.subcommands[0].flags.is_empty());
     }
 
-    /// Dedup: existing flag not duplicated; new flag added; subcommand + arg created.
     #[test]
     fn test_add_to_existing_rule_dedup_flags() {
         let (_dir, path) = create_config(
@@ -131,7 +124,6 @@ flags = ["--no-pager"]
         assert_eq!(rule.subcommands[0].args, vec!["sshd"]);
     }
 
-    /// New subcommand added alongside existing one.
     #[test]
     fn test_add_new_subcommand_to_existing_rule() {
         let (_dir, path) = create_config(
@@ -156,7 +148,6 @@ args = ["sshd"]
         assert_eq!(rule.subcommands[1].args, vec!["sshd"]);
     }
 
-    /// Flags only, no subcommand.
     #[test]
     fn test_add_rule_no_subcommands_only_flags() {
         let (_dir, path) = minimal_config();
@@ -171,7 +162,6 @@ args = ["sshd"]
         assert!(rule.args.is_empty());
     }
 
-    /// Same flag passed twice → deduplicated.
     #[test]
     fn test_merge_flags_dedup_same_flag_twice() {
         let (_dir, path) = minimal_config();
@@ -183,7 +173,6 @@ args = ["sshd"]
         assert_eq!(rule.flags, vec!["--verbose"]);
     }
 
-    /// Existing arg not duplicated.
     #[test]
     fn test_merge_args_dedup() {
         let (_dir, path) = create_config(
@@ -205,7 +194,6 @@ args = ["sshd.service"]
         assert_eq!(rule.subcommands[0].args, vec!["sshd.service"]);
     }
 
-    /// Flag value consumed, not stored as positional arg.
     #[test]
     fn test_flag_with_value_consumed() {
         let (_dir, path) = minimal_config();
@@ -219,7 +207,6 @@ args = ["sshd.service"]
         assert!(rule.args.is_empty());
     }
 
-    /// Flag value consumed; next token after value is subcommand.
     #[test]
     fn test_flag_value_followed_by_subcommand() {
         let (_dir, path) = minimal_config();
@@ -235,7 +222,6 @@ args = ["sshd.service"]
         assert!(rule.subcommands[0].args.is_empty());
     }
 
-    /// Empty command string → error.
     #[test]
     fn test_add_rule_empty_command() {
         let (_dir, path) = minimal_config();
@@ -246,7 +232,6 @@ args = ["sshd.service"]
         );
     }
 
-    /// Invalid shlex (unclosed quote) → error.
     #[test]
     fn test_add_rule_invalid_shlex() {
         let (_dir, path) = minimal_config();
@@ -257,7 +242,6 @@ args = ["sshd.service"]
         );
     }
 
-    /// Command with no flags or args → rule created.
     #[test]
     fn test_add_rule_command_only_no_params() {
         let (_dir, path) = minimal_config();
@@ -271,7 +255,6 @@ args = ["sshd.service"]
         assert!(rule.args.is_empty());
     }
 
-    /// Flags after subcommand name.
     #[test]
     fn test_walk_and_merge_flag_after_subcommand() {
         let (_dir, path) = minimal_config();
@@ -291,9 +274,6 @@ args = ["sshd.service"]
         assert!(rule.subcommands[0].args.is_empty());
     }
 
-    // ── Profile tests ──────────────────────────────────────────────
-
-    /// `--profile admin` adds rule into profile's rules.
     #[test]
     fn test_add_rule_to_profile() {
         let (_dir, path) = create_config(
@@ -317,7 +297,6 @@ users = ["admin_user"]
         assert_eq!(config.rules.len(), 1);
     }
 
-    /// `--profile nonexistent` → error: profile does not exist.
     #[test]
     fn test_add_rule_to_nonexistent_profile() {
         let (_dir, path) = minimal_config();
@@ -329,7 +308,6 @@ users = ["admin_user"]
         );
     }
 
-    /// `--profile admin` auto-creates flag groups only within profile scope.
     #[test]
     fn test_add_rule_to_profile_auto_flag_group() {
         let (_dir, path) = create_config(
@@ -378,8 +356,6 @@ flags = ["--no-pager", "--since", "--full"]
         assert_eq!(config.rules.len(), 1);
     }
 }
-
-// ─── Internal helpers (unchanged logic, extracted for re-use) ──────────
 
 /// Walk argv tokens and merge them into the rule tree.
 fn walk_and_merge(rule: &mut Rule, argv: &[String]) {

@@ -160,7 +160,6 @@ min = 1
         assert!(s.contains(r#"values = ["a", "b"]"#));
     }
 
-    // Trigger visitor expecting() by providing wrong TOML type (bool instead of table)
     #[test]
     fn test_error_message_contains_expecting() {
         let toml_str = "true";

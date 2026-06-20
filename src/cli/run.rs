@@ -4,7 +4,6 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
     let cfg = Config::from_file(config_path)?;
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
 
-    // Resolve effective config for this user (profile-aware)
     let effective = cfg.resolve_for_user(&user)?;
     let effective_global = effective.global.clone();
 
@@ -41,7 +40,6 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
 
     let rule = &effective.rules[match_result.rule_index];
 
-    // Audit: allowed
     let detail = format!(
         "rule[{}] via {}",
         match_result.rule_index,
@@ -65,7 +63,6 @@ mod tests {
     use super::run;
     use std::io::Write;
 
-    /// Path before logging::init: bad config path → Config::from_file error
     #[test]
     fn test_run_bad_config_path() {
         let result = run("/tmp/nonexistent-ssh-guard-config-12345.toml");
@@ -77,10 +74,6 @@ mod tests {
         );
     }
 
-    /// Valid config but no SSH_ORIGINAL_COMMAND set → NoCommand error
-    /// This path goes through logging::init which connects to syslog.
-    /// On systems without syslog, logging::init fails before env var check.
-    /// We test that the overall Result is Err (either from logging or NoCommand).
     #[test]
     fn test_run_valid_config_no_env() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
@@ -98,18 +91,12 @@ action = {{ type = "show_help" }}
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
-        // Isolate env: ensure SSH_ORIGINAL_COMMAND is absent to avoid
-        // interference from parallel tests that set it.
         temp_env::with_var("SSH_ORIGINAL_COMMAND", None::<&str>, || {
             let result = run(&path);
-            // Either logging::init fails (no syslog) or NoCommand if syslog available
             assert!(result.is_err());
         });
     }
 
-    /// Valid config + SSH_ORIGINAL_COMMAND set + USER set
-    /// Tests the empty-command → help path (L8-13).
-    /// Still needs syslog, so may fail at logging::init.
     #[test]
     fn test_run_with_env_empty_command() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
@@ -131,8 +118,6 @@ action = {{ type = "show_help" }}
         temp_env::with_var("USER", Some("testuser"), || {
             temp_env::with_var("SSH_ORIGINAL_COMMAND", Some(""), || {
                 let result = run(&path);
-                // If syslog available, should return Ok(0) for empty command.
-                // Otherwise Err from logging::init.
                 if let Ok(code) = result {
                     assert_eq!(code, 0);
                 }
@@ -140,8 +125,6 @@ action = {{ type = "show_help" }}
         });
     }
 
-    /// Profile resolution: USER matches a profile → effective config used.
-    /// This test uses a config with profiles and an empty-command path.
     #[test]
     fn test_run_with_profile_matching_help() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();

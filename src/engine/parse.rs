@@ -1,7 +1,6 @@
 use super::types::{ArgPattern, TemplateType};
 
 pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
-    // Inline flag: "--flag={...}" - requires '=' before '{'
     if let Some(eq_pos) = raw.find("={") {
         if eq_pos > 0 && raw.ends_with('}') {
             let flag = &raw[..eq_pos];
@@ -14,13 +13,11 @@ pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
         }
     }
 
-    // Standalone template: "{...}" with nothing outside braces
     if raw.starts_with('{') && raw.ends_with('}') && raw.len() > 2 {
         let inner = &raw[1..raw.len() - 1];
         return ArgPattern::Template(parse_template_type(inner));
     }
 
-    // Template with context: prefix{type} or {type}suffix or prefix{type}suffix
     if let Some(open) = raw.find('{') {
         if let Some(close) = raw[open..].find('}') {
             let abs_close = open + close;
@@ -47,7 +44,6 @@ pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
         }
     }
 
-    // 4. Literal
     ArgPattern::Literal(raw.to_string())
 }
 
@@ -307,14 +303,12 @@ mod tests {
 
     #[test]
     fn test_parse_inline_flag_no_closing_brace() {
-        // raw has "={" but no closing '}' → falls through to template/literal
         let p = parse_arg_pattern("--flag={value");
         assert!(matches!(p, ArgPattern::Literal(_)));
     }
 
     #[test]
     fn test_parse_eq_no_brace() {
-        // raw has "=" but not "={"
         let p = parse_arg_pattern("--key=value");
         assert!(matches!(p, ArgPattern::Literal(_)));
     }

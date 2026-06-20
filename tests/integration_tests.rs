@@ -6,7 +6,6 @@ use std::collections::HashMap;
 
 #[test]
 fn test_full_config_round_trip_via_file() {
-    // Create config programmatically, write to file, read back, verify
     let cfg = config::Config {
         global: config::global::Global {
             audit_log: "/tmp/test-audit.log".into(),
@@ -71,14 +70,12 @@ fn test_full_config_round_trip_via_file() {
         ..Default::default()
     };
 
-    // Write to temp file
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("roundtrip.toml");
     let path_str = config_path.to_str().unwrap();
 
     cfg.write_to_file(path_str).unwrap();
 
-    // Read back
     let loaded = config::Config::from_file(path_str).unwrap();
 
     assert_eq!(loaded.rules.len(), 2);
@@ -90,7 +87,6 @@ fn test_full_config_round_trip_via_file() {
     assert_eq!(loaded.roots, vec!["/var/log"]);
     assert!(loaded.contracts.contains_key("svc"));
 
-    // Verify rule 0
     let r0 = &loaded.rules[0];
     assert_eq!(r0.command_name(), Some("systemctl"));
     assert_eq!(r0.flag_groups, vec!["common"]);
@@ -101,7 +97,6 @@ fn test_full_config_round_trip_via_file() {
     assert_eq!(r0.subcommands[0].pre_args, vec!["--no-pager"]);
     assert_eq!(r0.subcommands[0].args, vec!["{string}.service"]);
 
-    // Verify rule 1
     let r1 = &loaded.rules[1];
     assert_eq!(r1.command_name(), Some("help"));
     assert!(matches!(r1.action, Action::ShowHelp));
@@ -109,7 +104,6 @@ fn test_full_config_round_trip_via_file() {
 
 #[test]
 fn test_full_config_round_trip_via_toml_string() {
-    // Programmatic -> TOML string -> parse -> verify
     let cfg = config::Config {
         rules: vec![Rule {
             action: Action::Run {
@@ -141,7 +135,6 @@ fn test_full_config_round_trip_via_toml_string() {
 
 #[test]
 fn test_parse_config_from_file_string_and_back() {
-    // Round-trip starting from a TOML string
     let original_toml = r#"
 [global]
 audit_format = "logfmt"
@@ -170,13 +163,8 @@ args = ["{string}.service"]
     assert_eq!(reloaded.flag_groups.len(), cfg.flag_groups.len());
 }
 
-// ---------------------------------------------------------------------------
-// Template engine + config integration
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_template_suffix_in_full_config_flow() {
-    // Define a config with contract + template suffix, parse it, verify structure
     let toml_str = r#"
 [contracts.unit]
 type = "enum"
@@ -204,7 +192,6 @@ args = ["{unit}.service"]
 
 #[test]
 fn test_mixed_contract_types_in_config() {
-    // Config with all three contract types
     let toml_str = r#"
 [contracts.port]
 type = "int_range"
@@ -252,7 +239,6 @@ command = "test"
 
 #[test]
 fn test_nested_subcommands_deep_config() {
-    // Three levels of nesting
     let toml_str = r#"
 [[rules]]
 action = { type = "run", binary = "/bin/cmd", args = [] }
@@ -287,13 +273,8 @@ args = ["{any}"]
     assert_eq!(l3.args, vec!["{any}"]);
 }
 
-// ---------------------------------------------------------------------------
-// Flag groups integration
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_flag_groups_across_multiple_rules() {
-    // flag_groups referenced by rule top-level AND subcommand
     let toml_str = r#"
 [flag_groups]
 common = ["--no-pager", "--full"]
@@ -321,13 +302,8 @@ flag_groups = ["common"]
     assert_eq!(cfg.rules[1].flag_groups, vec!["common"]);
 }
 
-// ---------------------------------------------------------------------------
-// Arg style propagation
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_arg_style_inheritance_in_config() {
-    // Parent GnuLong, subcommand inherits, another overrides
     let toml_str = r#"
 [[rules]]
 action = { type = "run", binary = "/bin/cmd", args = [] }
@@ -356,10 +332,6 @@ flags = ["-p"]
     assert_eq!(r.subcommands[2].arg_style, Some(ArgStyle::PosixShort));
 }
 
-// ---------------------------------------------------------------------------
-// Duration edge cases in full config
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_duration_variants_in_full_config() {
     let toml_str = r#"
@@ -378,7 +350,6 @@ action = { type = "run", binary = "/bin/c", args = [], timeout = 4242 }
 
 #[test]
 fn test_duration_minutes_and_seconds() {
-    // "2m" and "30s" should work fine
     let toml_str = r#"
 [[rules]]
 action = { type = "run", binary = "/bin/x", args = [], timeout = "2m" }
@@ -404,17 +375,12 @@ action = { type = "run", binary = "/bin/x", args = [], timeout = "45s" }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Error cases
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_invalid_config_missing_action_type() {
     let toml_str = r#"
 [[rules]]
 action = { binary = "/bin/x" }
 "#;
-    // Missing `type` field in tagged enum
     let result: Result<config::Config, _> = toml::from_str(toml_str);
     assert!(result.is_err());
 }
@@ -441,7 +407,6 @@ action = { type = "do_something_weird", binary = "/bin/x" }
 
 #[test]
 fn test_config_with_empty_subcommands_and_args() {
-    // A rule with no subcommands and no args -- just flags
     let toml_str = r#"
 [[rules]]
 action = { type = "run", binary = "/bin/uptime", args = [] }

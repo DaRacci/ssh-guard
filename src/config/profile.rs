@@ -29,7 +29,6 @@ pub struct GlobalOverride {
 }
 
 impl GlobalOverride {
-    /// Merge these overrides into a base `Global`, returning the result.
     pub fn apply_to(&self, base: &Global) -> Global {
         Global {
             audit_log: self
@@ -72,11 +71,11 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<GlobalOverride>,
 
-    /// Optional contract overrides (map merge, profile keys win).
+    /// Optional contract overrides (profile keys win on conflict).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contracts: Option<Contracts>,
 
-    /// Optional flag-group overrides (map merge, profile keys win).
+    /// Optional flag-group overrides (profile keys win on conflict).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag_groups: Option<FlagGroups>,
 

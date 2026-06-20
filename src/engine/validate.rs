@@ -219,8 +219,6 @@ mod tests {
 
     #[test]
     fn test_contract_int_range_parse_error() {
-        // Covers the .map_err(|_| ...) closure in IntRange validation when
-        // the value is not a valid integer (e.g. "abc" for an int_range contract)
         let mut contracts = HashMap::new();
         contracts.insert(
             "port".into(),

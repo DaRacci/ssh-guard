@@ -14,7 +14,6 @@ pub struct Subcommand {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flag_groups: Vec<String>,
 
-    /// Inline allowed flags / switches.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<String>,
 
@@ -30,7 +29,6 @@ pub struct Subcommand {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_args: Vec<String>,
 
-    /// Nested subcommands.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subcommands: Vec<Subcommand>,
 }

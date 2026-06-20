@@ -82,7 +82,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         .iter()
         .find(|(id, _)| *id == identifier)
         .map(|(_, mult)| *mult)
-        .ok_or_else(|| GuardError::Config(format!("invalid duration suffix: {identifier}")))?; // This should never fail since we already found the identifier above
+        .ok_or_else(|| GuardError::Config(format!("invalid duration suffix: {identifier}")))?;
 
     let number = raw_number
         .parse::<f64>()
@@ -162,15 +162,11 @@ mod tests {
         assert!(parse_duration("ms").is_err());
     }
 
-    // --- Default ---
-
     #[test]
     fn test_default_duration() {
         let d = Duration::default();
         assert_eq!(d.millis, 5000);
     }
-
-    // --- Deserialize ---
 
     #[test]
     fn test_deserialize_integer() {
@@ -190,15 +186,11 @@ mod tests {
         assert_eq!(d.millis, 5000);
     }
 
-    // --- Serialize ---
-
     #[test]
     fn test_serialize_ms_format() {
         let d = Duration { millis: 5000 };
         assert_eq!(serde_json::to_string(&d).unwrap().trim(), r#""5000ms""#);
     }
-
-    // --- Round-trip ---
 
     #[test]
     fn test_round_trip_integer() {
@@ -216,27 +208,20 @@ mod tests {
         assert_eq!(back.millis, 120_000);
     }
 
-    // --- visit_i64 ---
-
     #[test]
     fn test_deserialize_negative_i64() {
-        // visit_i64 with negative value should truncate to u64 (wrapping)
         let d: Duration = serde_json::from_str("-5000").unwrap();
         assert_eq!(d.millis, 18446744073709546616);
     }
 
     #[test]
     fn test_deserialize_positive_i64() {
-        // visit_i64 with positive value
         let d: Duration = serde_json::from_str("10000").unwrap();
         assert_eq!(d.millis, 10000);
     }
 
-    // --- expecting() via invalid deserialize type ---
-
     #[test]
     fn test_deserialize_bool_triggers_expecting() {
-        // Deserializing a bool should trigger the visitor's expecting() message
         let result: StdResult<Duration, _> = serde_json::from_str("true");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -246,15 +231,11 @@ mod tests {
         );
     }
 
-    // --- visit_str with invalid string ---
-
     #[test]
     fn test_deserialize_invalid_string() {
         let result: StdResult<Duration, _> = serde_json::from_str(r#""not-a-duration""#);
         assert!(result.is_err());
     }
-
-    // --- parse_duration additional cases ---
 
     #[test]
     fn test_parse_integer_hours() {

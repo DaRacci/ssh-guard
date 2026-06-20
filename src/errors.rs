@@ -5,20 +5,13 @@ pub type Result<T> = std::result::Result<T, GuardError>;
 /// One specific failure when trying to match a command against a rule tree.
 #[derive(Debug, Clone)]
 pub struct MatchFailure {
-    /// Index into Config.rules
     pub rule_index: usize,
 
-    /// Subcommand path we had traversed when the failure occurred.
     /// e.g. ["git", "remote"] means we got past "git" then "remote" but failed deeper.
     pub subcommand_path: Vec<String>,
 
-    /// 0-based token index in the original command argv that caused the failure.
     pub at_token: usize,
-
-    /// The token value at that position.
     pub token: String,
-
-    /// Human-readable reason.
     pub reason: String,
 }
 
@@ -48,7 +41,6 @@ pub enum GuardError {
     #[error("invalid command: {0}")]
     ParseCommand(String),
 
-    /// No rule matched. `failures` contains every attempted match and why it failed.
     #[error("no matching rule")]
     NoMatch {
         command: String,
@@ -78,8 +70,6 @@ pub enum GuardError {
 #[coverage(off)]
 mod tests {
     use super::*;
-
-    // ── MatchFailure Display ──────────────────────────────────────────
 
     #[test]
     fn match_failure_display_empty_path() {
@@ -122,8 +112,6 @@ mod tests {
         let got = f.to_string();
         assert_eq!(got, "rule[1] (via status): token 0 'status' - wrong flags");
     }
-
-    // ── GuardError Display ────────────────────────────────────────────
 
     #[test]
     fn guard_error_config() {
@@ -195,8 +183,6 @@ mod tests {
         let e = GuardError::Toml("syntax error".into());
         assert_eq!(e.to_string(), "TOML error: syntax error");
     }
-
-    // ── Debug output ──────────────────────────────────────────────────
 
     #[test]
     fn match_failure_debug() {

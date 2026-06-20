@@ -26,8 +26,7 @@ pub enum Command {
         /// The command to add, e.g. "journalctl --since yesterday -n 10"
         #[arg(long)]
         cmd: String,
-        /// Target profile name (optional). If omitted, modifies base config.
-        /// Profile must already exist in the config file.
+        /// Target profile name. If omitted, modifies base config.
         #[arg(long)]
         profile: Option<String>,
     },

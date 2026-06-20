@@ -104,7 +104,6 @@ mod tests {
             pre_args: vec![],
             subcommands: vec![],
         };
-        // sub has no style override → falls back to rule's style
         let style = effective_style(&rule, Some(&sub));
         assert_eq!(style, &ArgStyle::GnuLong);
     }
@@ -131,7 +130,6 @@ mod tests {
             pre_args: vec![],
             subcommands: vec![],
         };
-        // sub has Dos override → returns sub's style, not rule's
         let style = effective_style(&rule, Some(&sub));
         assert_eq!(style, &ArgStyle::Dos);
     }
@@ -149,7 +147,6 @@ mod tests {
             flags: vec![],
             subcommands: vec![],
         };
-        // None sub → falls back to rule's style
         let style = effective_style(&rule, None);
         assert_eq!(style, &ArgStyle::Dos);
     }

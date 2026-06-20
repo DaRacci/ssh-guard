@@ -55,7 +55,6 @@ pub(crate) fn try_match_rule(
         return Err(());
     }
 
-    // Resolve command name and match argv[0]
     let mut start = 0;
     if let Some(cmd) = rule.command_name() {
         if argv[0] != cmd {
@@ -85,14 +84,12 @@ pub(crate) fn try_match_rule(
         start = 1;
     }
 
-    // Consume top-level flags
     let top_flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
     let style = &rule.arg_style;
     let i = consume_flags(argv, start, &top_flags, style, rule_idx, &[], failures);
 
     if i >= argv.len() {
-        // All tokens consumed. If the rule has nothing to match against,
-        // this is fine (e.g., "help" with no args).
+        // All tokens consumed - fine if rule has nothing left to match
         if rule.subcommands.is_empty() && rule.args.is_empty() {
             return Ok(MatchResult {
                 rule_index: rule_idx,
@@ -112,13 +109,11 @@ pub(crate) fn try_match_rule(
         return Err(());
     }
 
-    // Branch: subcommands present vs rule-level args
     if !rule.subcommands.is_empty() {
         walk_subcommands(rule_idx, rule, config, argv, i, &[], failures)
     } else if !rule.args.is_empty() {
         match_remaining_args_inner(rule_idx, config, argv, i, &[], &rule.args, style, failures)
     } else {
-        // No subcommands and no args — unexpected remaining tokens
         record_failure(
             failures,
             rule_idx,
@@ -144,17 +139,14 @@ pub(crate) fn consume_flags(
     while i < argv.len() {
         let token = &argv[i];
 
-        // Exact match — consume regardless of style
         if allowed.contains(token) {
             i += 1;
-            // Consume value token if next is non-flag
             if i < argv.len() && !is_flag_like(&argv[i], style) {
                 i += 1;
             }
             continue;
         }
 
-        // Inline value: --flag=value or /flag:value
         let sep = if matches!(style, crate::config::arg::ArgStyle::Dos) {
             ':'
         } else {
@@ -168,9 +160,9 @@ pub(crate) fn consume_flags(
             }
         }
 
-        // Not in allowed list or matching inline template — stop.
-        // This token may be an inline arg template (--depth=5) or
-        // a positional arg. Let match_remaining_args handle it.
+        // Not in allowed list or matching inline template - stop.
+        // This token may be an inline arg template or positional arg.
+        // Let match_remaining_args handle it.
         break;
     }
     i
@@ -196,16 +188,14 @@ pub(crate) fn walk_subcommands(
         new_path.push(sub.name.clone());
         let mut i = start + 1;
 
-        // Consume this subcommand's flags
         let sub_style = effective_style(rule, Some(sub));
         let sub_flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
         i = consume_flags(
             argv, i, &sub_flags, sub_style, rule_idx, &new_path, failures,
         );
 
-        // Check nested subcommands
         if !sub.subcommands.is_empty() && i < argv.len() {
-            // Peek at next token — if it matches a nested subcommand, descend
+            // Peek at next token - if it matches a nested subcommand, descend
             if sub.subcommands.iter().any(|n| n.name == argv[i]) {
                 return walk_subcommands_nested(
                     rule_idx, rule, config, argv, i, &new_path, sub, failures,
@@ -213,7 +203,6 @@ pub(crate) fn walk_subcommands(
             }
         }
 
-        // No more nesting — match remaining as args
         return match_remaining_args(rule_idx, config, argv, i, &new_path, sub, failures);
     }
 
@@ -248,7 +237,6 @@ pub(crate) fn walk_subcommands_nested(
             argv, i, &sub_flags, sub_style, rule_idx, &new_path, failures,
         );
 
-        // Deeper nesting?
         if !sub.subcommands.is_empty() && i < argv.len() {
             if sub.subcommands.iter().any(|n| n.name == argv[i]) {
                 return walk_subcommands_nested(
@@ -317,7 +305,7 @@ pub(crate) fn match_remaining_args_inner(
                         {
                             record_failure(failures, rule_idx, path, i, token, &reason);
                             has_error = true;
-                            // Still advance — collect all errors
+                            // Still advance - collect all errors
                         }
                         captures.insert(cap_name, value.to_string());
                         matched = true;
@@ -326,7 +314,6 @@ pub(crate) fn match_remaining_args_inner(
                     }
                 }
                 ArgPattern::Template(template) => {
-                    // Positional — matches any non-flag token
                     if !is_flag_like(token, style) {
                         let cap_name = capture_name(template, &mut arg_counter);
                         if let Err(reason) =
@@ -466,7 +453,7 @@ mod tests {
                 f
             },
             rules: vec![
-                // Rule 0 — git
+                // Rule 0 - git
                 Rule {
                     action: Action::Run {
                         binary: "/run/current-system/sw/bin/git".into(),
@@ -531,7 +518,7 @@ mod tests {
                         },
                     ],
                 },
-                // Rule 1 — help
+                // Rule 1 - help
                 Rule {
                     action: Action::ShowHelp,
                     command: Some("help".into()),
@@ -549,8 +536,6 @@ mod tests {
             ..Default::default()
         }
     }
-
-    // --- Basic matching ---
 
     #[test]
     fn test_match_help() {
@@ -628,8 +613,6 @@ mod tests {
         assert_eq!(result.rule_index, 0);
     }
 
-    // --- Nested subcommands ---
-
     #[test]
     fn test_match_nested_subcommand() {
         let cfg = make_config();
@@ -645,8 +628,6 @@ mod tests {
         assert_eq!(result.captures.get("arg_0").unwrap(), "user/repo");
     }
 
-    // --- Flags scoped (not recursive) ---
-
     #[test]
     fn test_flags_scoped_not_recursive() {
         let cfg = make_config();
@@ -661,8 +642,6 @@ mod tests {
         }
     }
 
-    // --- Top-level flags ---
-
     #[test]
     fn test_top_level_flags() {
         let cfg = make_config();
@@ -671,8 +650,6 @@ mod tests {
         assert_eq!(result.rule_index, 0);
         assert_eq!(result.subcommand_path, vec!["status"]);
     }
-
-    // --- Unknown subcommand ---
 
     #[test]
     fn test_unknown_subcommand() {
@@ -686,8 +663,6 @@ mod tests {
             other => panic!("expected NoMatch, got {other:?}"),
         }
     }
-
-    // --- Collect all failures ---
 
     #[test]
     fn test_rich_errors_multiple_failures() {
@@ -707,8 +682,6 @@ mod tests {
             other => panic!("expected NoMatch, got {other:?}"),
         }
     }
-
-    // --- Contract validation ---
 
     #[test]
     fn test_contract_int_range_ok() {
@@ -794,8 +767,6 @@ mod tests {
         }
     }
 
-    // --- Template suffix matching ---
-
     #[test]
     fn test_match_template_suffix_enum_ok() {
         let mut cfg2 = make_config();
@@ -848,8 +819,6 @@ mod tests {
         let result = match_command(&cfg, &["git".into(), "status".into(), "angrr".into()]);
         assert!(result.is_err());
     }
-
-    // --- Template context matching ---
 
     #[test]
     fn test_match_template_context_prefix_ok() {
@@ -924,8 +893,6 @@ mod tests {
         let result = match_command(&cfg, &argv);
         assert!(result.is_err());
     }
-
-    // --- Matching with Arg Style Override ---
 
     #[test]
     fn test_match_dos_subcommand_flags() {
@@ -1028,8 +995,6 @@ mod tests {
         assert_eq!(result.captures.get("arg_0").unwrap(), "args");
     }
 
-    // --- Flag and Subcommand Order Tests ---
-
     #[test]
     fn test_match_flags_before_subcommand() {
         let cfg = make_config();
@@ -1073,8 +1038,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- Template Context Edge Cases ---
-
     #[test]
     fn test_match_template_context_exact_boundary() {
         let mut cfg = make_config();
@@ -1097,8 +1060,6 @@ mod tests {
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap().captures.get("arg_0").unwrap(), "42");
     }
-
-    // --- Error Collection ---
 
     #[test]
     fn test_multiple_validation_failures() {
@@ -1141,14 +1102,10 @@ mod tests {
         }
     }
 
-    // --- Rule with no command_name (command=None, non-Run action) ---
-
     #[test]
     fn test_rule_no_command() {
         let mut cfg = make_config();
-        // Rule with command=None and a subcommand, command_name() returns None,
-        // so the command-name check is skipped (covers the None branch at match L73).
-        // argv[0] matches the subcommand name.
+        // command_name()=None -> command-name check skipped
         cfg.rules.push(Rule {
             action: Action::ShowHelp,
             command: None,
@@ -1174,11 +1131,8 @@ mod tests {
         assert_eq!(result.subcommand_path, vec!["any-tool"]);
     }
 
-    // --- No subcommand / arg after flags consumed ---
-
     #[test]
     fn test_no_args_after_command_with_subcommands() {
-        // Rule has subcommands but argv is just the command name
         let cfg = make_config();
         let argv = vec!["git".into()];
         let err = match_command(&cfg, &argv).unwrap_err();
@@ -1196,7 +1150,6 @@ mod tests {
 
     #[test]
     fn test_unexpected_arguments_no_subcommands_no_args() {
-        // Rule has no subcommands and no args -- extra tokens are unexpected
         let mut cfg = make_config();
         cfg.rules.push(Rule {
             action: Action::ShowHelp,
@@ -1218,8 +1171,6 @@ mod tests {
             other => panic!("expected NoMatch, got {other:?}"),
         }
     }
-
-    // --- Dos style inline flag consumption in consume_flags ---
 
     #[test]
     fn test_consume_flags_dos_inline() {
@@ -1246,7 +1197,7 @@ mod tests {
                 subcommands: vec![],
             }],
         });
-        // /verbose:true before subcommand - consumed at top-level by consume_flags
+        // /verbose:true consumed at top-level by consume_flags
         let argv = vec![
             "dos-tool".into(),
             "/verbose:true".into(),
@@ -1256,8 +1207,6 @@ mod tests {
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.captures.get("arg_0").unwrap(), "data");
     }
-
-    // --- walk_subcommands: token doesn't match any subcommand ---
 
     #[test]
     fn test_walk_subcommands_token_not_found() {
@@ -1272,8 +1221,6 @@ mod tests {
             other => panic!("expected NoMatch, got {other:?}"),
         }
     }
-
-    // --- walk_subcommands_nested: matched nested subcommand with remaining args ---
 
     #[test]
     fn test_walk_subcommands_nested_with_args() {
@@ -1294,8 +1241,6 @@ mod tests {
         assert_eq!(result.captures.get("arg_0").unwrap(), "my-remote");
     }
 
-    // --- InlineFlag with Dos style separator in match_remaining_args_inner ---
-
     #[test]
     fn test_inline_flag_dos_separator_in_args() {
         let mut cfg = make_config();
@@ -1314,8 +1259,6 @@ mod tests {
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.captures.get("arg_0").unwrap(), "5");
     }
-
-    // --- TemplateContext: empty capture (base_start >= base_end) ---
 
     #[test]
     fn test_template_context_empty_capture() {
@@ -1343,8 +1286,6 @@ mod tests {
         }
     }
 
-    // --- TemplateContext: prefix matches but suffix doesn't ---
-
     #[test]
     fn test_template_context_suffix_mismatch() {
         let mut cfg = make_config();
@@ -1370,8 +1311,6 @@ mod tests {
         }
     }
 
-    // --- Rule-level args (no subcommands) ---
-
     #[test]
     fn test_rule_level_args_no_subcommands() {
         let mut cfg = make_config();
@@ -1390,8 +1329,6 @@ mod tests {
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.captures.get("arg_0").unwrap(), "value");
     }
-
-    // --- Dos-style InlineFlag in match_remaining_args_inner ---
 
     #[test]
     fn test_inline_flag_dos_colon_separator() {
