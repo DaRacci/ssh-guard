@@ -25,10 +25,22 @@ pub struct AuditEvent {
     /// For denied: list of attempted match failures (serialized as JSON array).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failures: Option<Vec<String>>,
+
+    /// Exit code of the command.
+    pub exit_code: i32,
+
+    /// SHA-256 hex digest of the config file contents the command ran against.
+    pub config_hash: String,
 }
 
 impl AuditEvent {
-    pub fn allowed(user: &str, command: &str, detail: &str) -> Self {
+    pub fn allowed(
+        user: &str,
+        command: &str,
+        detail: &str,
+        exit_code: i32,
+        config_hash: &str,
+    ) -> Self {
         Self {
             timestamp: chrono_now(),
             user: user.into(),
@@ -36,10 +48,19 @@ impl AuditEvent {
             result: "allowed".into(),
             detail: Some(detail.into()),
             failures: None,
+            exit_code,
+            config_hash: config_hash.into(),
         }
     }
 
-    pub fn denied(user: &str, command: &str, reason: &str, failures: &[String]) -> Self {
+    pub fn denied(
+        user: &str,
+        command: &str,
+        reason: &str,
+        failures: &[String],
+        exit_code: i32,
+        config_hash: &str,
+    ) -> Self {
         let f = if failures.is_empty() {
             None
         } else {
@@ -52,6 +73,8 @@ impl AuditEvent {
             result: "denied".into(),
             detail: Some(reason.into()),
             failures: f,
+            exit_code,
+            config_hash: config_hash.into(),
         }
     }
 
@@ -82,6 +105,8 @@ impl AuditEvent {
             format!("user={}", self.user),
             format!("command=\"{}\"", self.command),
             format!("result={}", self.result),
+            format!("exit_code={}", self.exit_code),
+            format!("config_hash={}", self.config_hash),
         ];
         if let Some(ref d) = self.detail {
             parts.push(format!("detail=\"{}\"", d));
@@ -159,30 +184,43 @@ mod tests {
             "ai-agent",
             "systemctl status sshd",
             "rule[0] systemctl/status",
+            0,
+            "abc123",
         );
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"allowed\""));
         assert!(json.contains("ai-agent"));
         assert!(json.contains("systemctl status sshd"));
+        assert!(json.contains("\"exit_code\":0"));
+        assert!(json.contains("\"config_hash\":\"abc123\""));
     }
 
     #[test]
     fn test_audit_event_denied() {
         let failures = vec!["rule[0]: token 2 '--bad' | unknown flag".into()];
-        let event =
-            AuditEvent::denied("ai-agent", "systemctl --bad", "no matching rule", &failures);
+        let event = AuditEvent::denied(
+            "ai-agent",
+            "systemctl --bad",
+            "no matching rule",
+            &failures,
+            1,
+            "abc123",
+        );
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"denied\""));
         assert!(json.contains("--bad"));
+        assert!(json.contains("\"exit_code\":1"));
     }
 
     #[test]
     fn test_audit_event_logfmt() {
-        let event = AuditEvent::allowed("agent", "help", "show_help");
+        let event = AuditEvent::allowed("agent", "help", "show_help", 0, "abc123");
         let line = event.to_logfmt();
         assert!(line.starts_with("ts="));
         assert!(line.contains("user=agent"));
         assert!(line.contains("result=allowed"));
+        assert!(line.contains("exit_code=0"));
+        assert!(line.contains("config_hash=abc123"));
     }
 
     #[test]
@@ -290,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_denied_empty_failures_no_failures_field() {
-        let event = AuditEvent::denied("user", "cmd", "reason", &[]);
+        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123");
         let json = serde_json::to_string(&event).unwrap();
         // failures should be absent from JSON
         assert!(
@@ -302,14 +340,14 @@ mod tests {
     #[test]
     fn test_denied_with_failures_has_failures_field() {
         let failures = vec!["x".into(), "y".into()];
-        let event = AuditEvent::denied("user", "cmd", "reason", &failures);
+        let event = AuditEvent::denied("user", "cmd", "reason", &failures, 1, "abc123");
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("failures"));
     }
 
     #[test]
     fn test_denied_empty_failures_logfmt_no_failures() {
-        let event = AuditEvent::denied("user", "cmd", "reason", &[]);
+        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123");
         let line = event.to_logfmt();
         assert!(!line.contains("failures"));
     }
@@ -321,7 +359,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
 
-        let event = AuditEvent::allowed("bob", "ls -la", "rule[0] ls");
+        let event = AuditEvent::allowed("bob", "ls -la", "rule[0] ls", 0, "abc123");
         let fmt = AuditFormat::Json;
         event.write_to(&path, &fmt).unwrap();
 
@@ -333,7 +371,7 @@ mod tests {
         assert!(trimmed.contains("\"allowed\""));
 
         // Append a second event
-        let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd");
+        let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd", 0, "abc123");
         event2.write_to(&path, &fmt).unwrap();
 
         let contents2 = std::fs::read_to_string(&path).unwrap();
@@ -351,6 +389,8 @@ mod tests {
             "rm -rf /",
             "dangerous command",
             &["rule[0]: token 0 'rm' - blocked".into()],
+            1,
+            "abc123",
         );
         let fmt = AuditFormat::Logfmt;
         event.write_to(&path, &fmt).unwrap();
@@ -369,7 +409,7 @@ mod tests {
         let path = dir.path().join("new_audit.log");
         let path_str = path.to_str().unwrap().to_string();
 
-        let event = AuditEvent::allowed("x", "y", "z");
+        let event = AuditEvent::allowed("x", "y", "z", 0, "abc123");
         event.write_to(&path_str, &AuditFormat::Json).unwrap();
 
         assert!(path.exists());

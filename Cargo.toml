@@ -19,6 +19,7 @@ nix = { version = "0.31.3", default-features = false, features = [
   "signal",
   "process",
 ] }
+sha2 = "0.11"
 
 [dev-dependencies]
 tempfile = "3"

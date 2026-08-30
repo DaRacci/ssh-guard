@@ -53,6 +53,20 @@ impl Config {
         toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
     }
 
+    /// SHA-256 hex digest of the raw config file contents.
+    ///
+    /// Hashes the file bytes exactly as read, so it can be tested against `sha256sum <path>`.
+    pub fn sha256(path: &str) -> Result<String, crate::errors::GuardError> {
+        use sha2::{Digest, Sha256};
+        let data = std::fs::read(path).map_err(|e| {
+            crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let digest = hasher.finalize();
+        Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
     pub fn to_toml_string(&self) -> Result<String, crate::errors::GuardError> {
         toml::to_string_pretty(self).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
     }
@@ -683,6 +697,31 @@ action = { type = "run", binary = "/bin/true" }
         assert_eq!(cfg.global.audit_log, "/tmp/test_inline.log");
         assert_eq!(cfg.rules.len(), 1);
         drop(tmp);
+    }
+
+    #[test]
+    fn test_sha256_matches_sha256sum() {
+        use std::io::Write;
+        let content = b"[global]\naudit_log = \"/dev/null\"\n";
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(content).unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let got = Config::sha256(&path).unwrap();
+        assert_eq!(got.len(), 64);
+        assert_eq!(got, Config::sha256(&path).unwrap());
+        let mut tmp2 = tempfile::NamedTempFile::new().unwrap();
+        tmp2.write_all(b"other").unwrap();
+        let path2 = tmp2.path().to_str().unwrap().to_string();
+        assert_ne!(got, Config::sha256(&path2).unwrap());
+        drop(tmp);
+        drop(tmp2);
+    }
+
+    #[test]
+    fn test_sha256_nonexistent() {
+        let path = "/tmp/__ssh_guard_test_nonexistent_sha256.toml";
+        assert!(Config::sha256(path).is_err());
     }
 
     #[test]
