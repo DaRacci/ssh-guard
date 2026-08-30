@@ -531,8 +531,27 @@ mod tests {
     use crate::config::arg::ArgStyle;
     use crate::config::global::Global;
     use std::collections::HashMap;
+    use std::io::Write;
+    use std::path::PathBuf;
 
     use super::*;
+
+    fn write_executable_script(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin_path = dir.path().join(name);
+        let temp_path = dir.path().join(format!(".{name}.tmp"));
+        let mut file = std::fs::File::create(&temp_path).unwrap();
+
+        file.write_all(body.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&temp_path, &bin_path).unwrap();
+
+        bin_path
+    }
 
     fn make_systemctl_rule() -> Rule {
         Rule {
@@ -1164,13 +1183,7 @@ mod tests {
     #[test]
     fn test_action_run_success() {
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("true_script");
-        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
-        std::fs::set_permissions(
-            &bin_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
 
         let argv: Vec<String> = vec![];
         let result = action_run(
@@ -1184,15 +1197,11 @@ mod tests {
 
     #[test]
     fn test_action_run_timeout() {
-        // Create a script that sleeps for a long time, run with tiny timeout
+        // Write to temp path, close it, then rename into place.
+        // Avoids ETXTBSY in nix/overlay-style sandboxes when exec happens
+        // immediately after script creation.
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("sleeper");
-        std::fs::write(&bin_path, "#!/bin/sh\nsleep 10").unwrap();
-        std::fs::set_permissions(
-            &bin_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let bin_path = write_executable_script(&dir, "sleeper", "#!/bin/sh\nsleep 10\n");
 
         let argv: Vec<String> = vec![];
         let result = action_run(
@@ -1501,13 +1510,7 @@ mod tests {
     #[test]
     fn test_execute_run_with_run_action() {
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("true_script");
-        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
-        std::fs::set_permissions(
-            &bin_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
 
         let config = Config::default();
         let rule = Rule {
@@ -1982,13 +1985,7 @@ mod tests {
     #[test]
     fn test_execute_dispatches_run() {
         let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("true_script");
-        std::fs::write(&bin_path, "#!/bin/sh\nexit 0").unwrap();
-        std::fs::set_permissions(
-            &bin_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
 
         let config = Config::default();
         let rule = Rule {

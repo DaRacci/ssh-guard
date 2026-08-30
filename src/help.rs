@@ -70,6 +70,12 @@ fn template_label(
                     None => name.clone(),
                 }
             }
+            TemplateType::Named { name, inner } => {
+                if !opts.verbose {
+                    return name.clone();
+                }
+                format!("{name}:{}", raw_union_member(inner, contracts, opts))
+            }
             TemplateType::Union(types) => types
                 .iter()
                 .map(|template| raw_union_member(template, contracts, opts))
@@ -92,6 +98,13 @@ fn template_label(
                     Some(Contract::Enum { values }) => format!("<{name}: {}>", values.join("|")),
                     None => format!("<{name}>"),
                 }
+            } else {
+                format!("<{name}>")
+            }
+        }
+        TemplateType::Named { name, inner } => {
+            if opts.verbose {
+                format!("<{name}:{}>", raw_union_member(inner, contracts, opts))
             } else {
                 format!("<{name}>")
             }
@@ -127,32 +140,26 @@ fn render_rule(config: &Config, rule: &Rule, opts: &HelpOptions) -> String {
     };
 
     let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
-    let mut parts = vec![paint(PALETTE.command, command, opts.colour)];
+    let mut prefix_parts = vec![paint(PALETTE.command, command, opts.colour)];
 
     let rendered_flags = render_args(&flags, &config.contracts, opts);
     if !rendered_flags.is_empty() {
-        parts.push(rendered_flags);
+        prefix_parts.push(rendered_flags);
     }
 
     let rendered_args = render_args(&rule.args, &config.contracts, opts);
     if !rendered_args.is_empty() {
-        parts.push(rendered_args);
+        prefix_parts.push(rendered_args);
     }
 
-    if opts.tree {
-        let mut lines = vec![parts.join(" ")];
+    if rule.subcommands.is_empty() {
+        prefix_parts.join(" ")
+    } else {
+        let mut lines = vec![prefix_parts.join(" ")];
         for subcommand in &rule.subcommands {
             lines.push(render_subcommand(config, subcommand, 1, opts));
         }
         lines.join("\n")
-    } else {
-        for subcommand in &rule.subcommands {
-            let rendered = render_subcommand(config, subcommand, 0, opts);
-            if !rendered.is_empty() {
-                parts.push(rendered);
-            }
-        }
-        parts.join(" ")
     }
 }
 
@@ -175,21 +182,11 @@ fn render_subcommand(
         parts.push(rendered_args);
     }
 
-    if opts.tree {
-        let mut lines = vec![format!("{}{}", "  ".repeat(depth), parts.join(" "))];
-        for nested in &sub.subcommands {
-            lines.push(render_subcommand(config, nested, depth + 1, opts));
-        }
-        lines.join("\n")
-    } else {
-        for nested in &sub.subcommands {
-            let rendered = render_subcommand(config, nested, depth, opts);
-            if !rendered.is_empty() {
-                parts.push(rendered);
-            }
-        }
-        parts.join(" ")
+    let mut lines = vec![format!("{}{}", "  ".repeat(depth), parts.join(" "))];
+    for nested in &sub.subcommands {
+        lines.push(render_subcommand(config, nested, depth + 1, opts));
     }
+    lines.join("\n")
 }
 
 fn render_args(
@@ -218,8 +215,9 @@ fn render_args(
             }
             ArgPattern::InlineFlag { flag, template } => {
                 let rendered_flag = paint(PALETTE.literal, &flag, opts.colour);
+                let equals = paint(PALETTE.dim, "=", opts.colour);
                 format!(
-                    "{rendered_flag}={}",
+                    "{rendered_flag}{equals}{}",
                     template_label(&template, contracts, opts)
                 )
             }
@@ -373,6 +371,40 @@ mod tests {
     }
 
     #[test]
+    fn test_label_named_nonverbose() {
+        let c = HashMap::new();
+        let named = crate::engine::types::TemplateType::Named {
+            name: "path".into(),
+            inner: Box::new(crate::engine::types::TemplateType::String),
+        };
+        assert_eq!(template_label(&named, &c, &opts(false)), "<path>");
+    }
+
+    #[test]
+    fn test_label_named_verbose() {
+        let c = HashMap::new();
+        let named = crate::engine::types::TemplateType::Named {
+            name: "path".into(),
+            inner: Box::new(crate::engine::types::TemplateType::String),
+        };
+        assert_eq!(template_label(&named, &c, &opts(true)), "<path:string>");
+    }
+
+    #[test]
+    fn test_label_named_inner_union() {
+        let c = HashMap::new();
+        let named = crate::engine::types::TemplateType::Named {
+            name: "x".into(),
+            inner: Box::new(crate::engine::types::TemplateType::Union(vec![
+                crate::engine::types::TemplateType::Int,
+                crate::engine::types::TemplateType::String,
+            ])),
+        };
+        assert_eq!(template_label(&named, &c, &opts(false)), "<x>");
+        assert_eq!(template_label(&named, &c, &opts(true)), "<x:int|string>");
+    }
+
+    #[test]
     fn test_paint_disabled() {
         assert_eq!(paint("\x1b[34m", "hello", false), "hello");
     }
@@ -383,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_compact_single_command() {
+    fn test_render_default_single_command_with_subcommands() {
         let config = Config {
             rules: vec![run_rule(
                 "systemctl",
@@ -395,13 +427,13 @@ mod tests {
         };
         let out = render_help(&config, &HelpOptions::default());
         assert!(
-            out.contains("systemctl status <unit>.service"),
+            out.contains("systemctl\n  status <unit>.service"),
             "got: {out}"
         );
     }
 
     #[test]
-    fn test_render_compact_multiple_commands() {
+    fn test_render_default_multiple_commands() {
         let config = Config {
             rules: vec![
                 run_rule(
@@ -409,17 +441,42 @@ mod tests {
                     vec![sub("status", vec!["{unit}.service".into()])],
                     vec![],
                 ),
-                run_rule("journalctl", vec![sub("-n", vec!["{int}".into()])], vec![]),
+                run_rule(
+                    "journalctl",
+                    vec![],
+                    vec!["-n={int}".into(), "--since".into()],
+                ),
             ],
             contracts: contracts(),
             ..Default::default()
         };
         let out = render_help(&config, &HelpOptions::default());
         assert!(
-            out.contains("systemctl status <unit>.service"),
+            out.contains("systemctl\n  status <unit>.service"),
             "got: {out}"
         );
-        assert!(out.contains("journalctl -n <int>"), "got: {out}");
+        assert!(out.contains("journalctl -n=<int> --since"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_default_subcommands_indented() {
+        let config = Config {
+            rules: vec![run_rule(
+                "systemctl",
+                vec![
+                    sub("status", vec!["{unit}.service".into()]),
+                    sub("show", vec!["{unit}".into()]),
+                ],
+                vec![],
+            )],
+            contracts: contracts(),
+            ..Default::default()
+        };
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(
+            out.contains("systemctl\n  status <unit>.service\n  show <unit>"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -486,6 +543,26 @@ mod tests {
         let config = Config::default();
         let out = render_help(&config, &HelpOptions::default());
         assert!(out.contains("Allowed commands"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_inline_flag_equals_dimmed_when_coloured() {
+        let config = Config {
+            rules: vec![run_rule("journalctl", vec![], vec!["-n={int}".into()])],
+            ..Default::default()
+        };
+        let out = render_help(
+            &config,
+            &HelpOptions {
+                tree: false,
+                verbose: false,
+                colour: true,
+            },
+        );
+        assert!(
+            out.contains("\x1b[36m-n\x1b[0m\x1b[2m=\x1b[0m\x1b[34m<int>\x1b[0m"),
+            "got: {out}"
+        );
     }
 
     #[test]
