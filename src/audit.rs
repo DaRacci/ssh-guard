@@ -8,6 +8,9 @@ pub struct AuditEvent {
     /// ISO 8601 timestamp.
     pub timestamp: String,
 
+    /// Unique id for this invocation.
+    pub session_id: String,
+
     /// The Unix username that ran the command (from SSH).
     pub user: String,
 
@@ -26,29 +29,53 @@ pub struct AuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failures: Option<Vec<String>>,
 
-    /// Exit code of the command.
-    pub exit_code: i32,
+    /// Exit code of the command. Absent for a "started" event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 
     /// SHA-256 hex digest of the config file contents the command ran against.
     pub config_hash: String,
 }
 
 impl AuditEvent {
+    /// Announce that an allowed command is about to be executed.
+    pub fn started(
+        user: &str,
+        command: &str,
+        detail: &str,
+        config_hash: &str,
+        session_id: &str,
+    ) -> Self {
+        Self {
+            timestamp: chrono_now(),
+            session_id: session_id.into(),
+            user: user.into(),
+            command: command.into(),
+            result: "started".into(),
+            detail: Some(detail.into()),
+            failures: None,
+            exit_code: None,
+            config_hash: config_hash.into(),
+        }
+    }
+
     pub fn allowed(
         user: &str,
         command: &str,
         detail: &str,
         exit_code: i32,
         config_hash: &str,
+        session_id: &str,
     ) -> Self {
         Self {
             timestamp: chrono_now(),
+            session_id: session_id.into(),
             user: user.into(),
             command: command.into(),
             result: "allowed".into(),
             detail: Some(detail.into()),
             failures: None,
-            exit_code,
+            exit_code: Some(exit_code),
             config_hash: config_hash.into(),
         }
     }
@@ -60,6 +87,7 @@ impl AuditEvent {
         failures: &[String],
         exit_code: i32,
         config_hash: &str,
+        session_id: &str,
     ) -> Self {
         let f = if failures.is_empty() {
             None
@@ -68,12 +96,13 @@ impl AuditEvent {
         };
         Self {
             timestamp: chrono_now(),
+            session_id: session_id.into(),
             user: user.into(),
             command: command.into(),
             result: "denied".into(),
             detail: Some(reason.into()),
             failures: f,
-            exit_code,
+            exit_code: Some(exit_code),
             config_hash: config_hash.into(),
         }
     }
@@ -102,12 +131,15 @@ impl AuditEvent {
     fn to_logfmt(&self) -> String {
         let mut parts = vec![
             format!("ts={}", self.timestamp),
+            format!("session_id={}", self.session_id),
             format!("user={}", self.user),
             format!("command=\"{}\"", self.command),
             format!("result={}", self.result),
-            format!("exit_code={}", self.exit_code),
             format!("config_hash={}", self.config_hash),
         ];
+        if let Some(code) = self.exit_code {
+            parts.push(format!("exit_code={code}"));
+        }
         if let Some(ref d) = self.detail {
             parts.push(format!("detail=\"{}\"", d));
         }
@@ -125,6 +157,18 @@ pub(crate) fn chrono_now() -> String {
         .unwrap_or_default();
     let secs = dur.as_secs();
     format_unix_time(secs)
+}
+
+/// Generate a unique session id for one invocation.
+///
+/// Combines the process id with sub-second wall-clock time.
+/// Each `run` is its own process, so this is unique per invocation.
+pub(crate) fn new_session_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{}", std::process::id(), nanos)
 }
 
 pub(crate) fn format_unix_time(secs: u64) -> String {
@@ -179,6 +223,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_audit_event_started() {
+        let event = AuditEvent::started(
+            "ai-agent",
+            "systemctl status sshd",
+            "rule[0] via systemctl/status",
+            "abc123",
+            "sess-1",
+        );
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"started\""));
+        assert!(json.contains("ai-agent"));
+        assert!(json.contains("systemctl status sshd"));
+        assert!(json.contains("\"session_id\":\"sess-1\""));
+        assert!(!json.contains("exit_code"));
+        assert!(json.contains("\"config_hash\":\"abc123\""));
+
+        let line = event.to_logfmt();
+        assert!(line.contains("result=started"));
+        assert!(line.contains("session_id=sess-1"));
+        assert!(!line.contains("exit_code"));
+    }
+
+    #[test]
+    fn test_new_session_id_unique() {
+        let a = new_session_id();
+        let b = new_session_id();
+        assert_ne!(a, b);
+        assert!(a.contains('-'));
+    }
+
+    #[test]
     fn test_audit_event_json() {
         let event = AuditEvent::allowed(
             "ai-agent",
@@ -186,11 +261,13 @@ mod tests {
             "rule[0] systemctl/status",
             0,
             "abc123",
+            "sess-1",
         );
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"allowed\""));
         assert!(json.contains("ai-agent"));
         assert!(json.contains("systemctl status sshd"));
+        assert!(json.contains("\"session_id\":\"sess-1\""));
         assert!(json.contains("\"exit_code\":0"));
         assert!(json.contains("\"config_hash\":\"abc123\""));
     }
@@ -205,20 +282,23 @@ mod tests {
             &failures,
             1,
             "abc123",
+            "sess-1",
         );
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"denied\""));
         assert!(json.contains("--bad"));
+        assert!(json.contains("\"session_id\":\"sess-1\""));
         assert!(json.contains("\"exit_code\":1"));
     }
 
     #[test]
     fn test_audit_event_logfmt() {
-        let event = AuditEvent::allowed("agent", "help", "show_help", 0, "abc123");
+        let event = AuditEvent::allowed("agent", "help", "show_help", 0, "abc123", "sess-1");
         let line = event.to_logfmt();
         assert!(line.starts_with("ts="));
         assert!(line.contains("user=agent"));
         assert!(line.contains("result=allowed"));
+        assert!(line.contains("session_id=sess-1"));
         assert!(line.contains("exit_code=0"));
         assert!(line.contains("config_hash=abc123"));
     }
@@ -328,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_denied_empty_failures_no_failures_field() {
-        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123");
+        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123", "sess-1");
         let json = serde_json::to_string(&event).unwrap();
         // failures should be absent from JSON
         assert!(
@@ -340,14 +420,14 @@ mod tests {
     #[test]
     fn test_denied_with_failures_has_failures_field() {
         let failures = vec!["x".into(), "y".into()];
-        let event = AuditEvent::denied("user", "cmd", "reason", &failures, 1, "abc123");
+        let event = AuditEvent::denied("user", "cmd", "reason", &failures, 1, "abc123", "sess-1");
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("failures"));
     }
 
     #[test]
     fn test_denied_empty_failures_logfmt_no_failures() {
-        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123");
+        let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123", "sess-1");
         let line = event.to_logfmt();
         assert!(!line.contains("failures"));
     }
@@ -359,7 +439,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
 
-        let event = AuditEvent::allowed("bob", "ls -la", "rule[0] ls", 0, "abc123");
+        let event = AuditEvent::allowed("bob", "ls -la", "rule[0] ls", 0, "abc123", "sess-1");
         let fmt = AuditFormat::Json;
         event.write_to(&path, &fmt).unwrap();
 
@@ -371,7 +451,7 @@ mod tests {
         assert!(trimmed.contains("\"allowed\""));
 
         // Append a second event
-        let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd", 0, "abc123");
+        let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd", 0, "abc123", "sess-2");
         event2.write_to(&path, &fmt).unwrap();
 
         let contents2 = std::fs::read_to_string(&path).unwrap();
@@ -391,6 +471,7 @@ mod tests {
             &["rule[0]: token 0 'rm' - blocked".into()],
             1,
             "abc123",
+            "sess-1",
         );
         let fmt = AuditFormat::Logfmt;
         event.write_to(&path, &fmt).unwrap();
@@ -409,7 +490,7 @@ mod tests {
         let path = dir.path().join("new_audit.log");
         let path_str = path.to_str().unwrap().to_string();
 
-        let event = AuditEvent::allowed("x", "y", "z", 0, "abc123");
+        let event = AuditEvent::allowed("x", "y", "z", 0, "abc123", "sess-1");
         event.write_to(&path_str, &AuditFormat::Json).unwrap();
 
         assert!(path.exists());

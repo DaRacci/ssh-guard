@@ -3,6 +3,7 @@ use crate::{actions, audit::AuditEvent, config::Config, engine, errors::GuardErr
 pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
     let cfg = Config::from_file(config_path)?;
     let config_hash = Config::sha256(config_path)?;
+    let session_id = crate::audit::new_session_id();
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
 
     let effective = cfg.resolve_for_user(&user)?;
@@ -14,8 +15,14 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
 
     if raw.trim().is_empty() {
         println!("{}", effective_global.help_text);
-        let event =
-            AuditEvent::allowed(&user, "(empty - help shown)", "show_help", 0, &config_hash);
+        let event = AuditEvent::allowed(
+            &user,
+            "(empty - help shown)",
+            "show_help",
+            0,
+            &config_hash,
+            &session_id,
+        );
         let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
         return Ok(0);
     }
@@ -33,6 +40,7 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
                 &failure_strings,
                 1,
                 &config_hash,
+                &session_id,
             );
             let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
             return Err(Box::new(GuardError::NoMatch {
@@ -41,7 +49,15 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
             }));
         }
         Err(e) => {
-            let event = AuditEvent::denied(&user, &raw, &e.to_string(), &[], 1, &config_hash);
+            let event = AuditEvent::denied(
+                &user,
+                &raw,
+                &e.to_string(),
+                &[],
+                1,
+                &config_hash,
+                &session_id,
+            );
             let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
             return Err(Box::new(e));
         }
@@ -55,6 +71,9 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
         match_result.subcommand_path.join("/")
     );
 
+    let event = AuditEvent::started(&user, &raw, &detail, &config_hash, &session_id);
+    let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
+
     let code = match actions::execute(
         &effective,
         rule,
@@ -64,13 +83,21 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
     ) {
         Ok(code) => code,
         Err(e) => {
-            let event = AuditEvent::denied(&user, &raw, &e.to_string(), &[], 1, &config_hash);
+            let event = AuditEvent::denied(
+                &user,
+                &raw,
+                &e.to_string(),
+                &[],
+                1,
+                &config_hash,
+                &session_id,
+            );
             let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
             return Err(Box::new(e));
         }
     };
 
-    let event = AuditEvent::allowed(&user, &raw, &detail, code, &config_hash);
+    let event = AuditEvent::allowed(&user, &raw, &detail, code, &config_hash, &session_id);
     let _ = event.write_to(&effective_global.audit_log, &effective_global.audit_format);
     Ok(code)
 }
