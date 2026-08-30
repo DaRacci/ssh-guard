@@ -5,7 +5,7 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 #![deny(clippy::pedantic)]
-#![feature(coverage_attribute)]
+#![cfg_attr(test, feature(coverage_attribute))]
 
 use std::process;
 

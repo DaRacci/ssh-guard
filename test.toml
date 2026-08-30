@@ -47,7 +47,7 @@ implicit_symlinks = true
 arg_style = "gnu_long"
 flags = [
     "--since",
-    "-n",
+    "-n={int}",
     "--no-pager",
 ]
 
