@@ -1,23 +1,40 @@
 {
-  self,
   inputs,
-  pkgs
-}: let
+  pkgs,
+  lib,
+  ...
+}:
+let
+  fs = lib.fileset;
+
   rustToolchain = (pkgs.extend inputs.rust-overlay.overlays.default).rust-bin.nightly.latest.default;
   customRustPlatform = pkgs.makeRustPlatform {
     rustc = rustToolchain;
     cargo = rustToolchain;
   };
-in customRustPlatform.buildRustPackage {
-  pname = "ssh-guard";
-  version = "0.1.0";
-  src = "${self}";
 
-  cargoHash = "sha256-4XvLZgUw2RA4LWFjy3coskNn1bZIYOlYsZFZKH4ygHI=";
+  cargoToml = fromTOML (builtins.readFile ../Cargo.toml);
+  version = cargoToml.package.version;
+in
+customRustPlatform.buildRustPackage {
+  inherit version;
+  pname = "ssh-guard";
+
+  src = fs.toSource {
+    root = ../.;
+    fileset = fs.unions [
+      ../src
+      ../Cargo.toml
+      ../Cargo.lock
+      ../tests
+    ];
+  };
+
+  cargoHash = "sha256-XvgFyA1I8qfG1WU2ELRZ2Dn1ZXsoafBSu1uCMlw0Nwo=";
 
   meta = {
     description = "Restricted SSH command guard";
-    license = pkgs.lib.licenses.agpl3Only;
+    license = lib.licenses.agpl3Only;
     mainProgram = "ssh-guard";
   };
 }

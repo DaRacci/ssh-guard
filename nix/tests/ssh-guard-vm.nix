@@ -1,77 +1,80 @@
 { self, pkgs }:
 
 let
-  inherit (pkgs) lib testers;
+  inherit (pkgs) testers;
 
   sshGuardPackage = self.packages.${pkgs.system}.default;
   sshGuardModule = import ../modules/nixos/ssh-guard.nix { inherit self; };
 
-  clientKey = pkgs.runCommandLocal "ssh-guard-test-client-key" {
-    nativeBuildInputs = [ pkgs.openssh ];
-  } ''
-    mkdir -p "$out"
-    ssh-keygen -t ed25519 -N "" -f "$out/id_ed25519"
-    chmod 644 "$out/id_ed25519.pub"
-  '';
+  clientKey =
+    pkgs.runCommandLocal "ssh-guard-test-client-key"
+      {
+        nativeBuildInputs = [ pkgs.openssh ];
+      }
+      ''
+        mkdir -p "$out"
+        ssh-keygen -t ed25519 -N "" -f "$out/id_ed25519"
+        chmod 644 "$out/id_ed25519.pub"
+      '';
 in
 
 testers.runNixOSTest {
   name = "ssh-guard-vm";
 
-  nodes.server = { pkgs, lib, ... }: {
-    imports = [ sshGuardModule ];
+  nodes.server =
+    { pkgs, lib, ... }:
+    {
+      imports = [ sshGuardModule ];
 
-    services.openssh = {
-      enable = true;
-      settings = {
-        PasswordAuthentication = false;
-        PermitRootLogin = "no";
-      };
-    };
-
-    services.ssh-guard = {
-      enable = true;
-      package = sshGuardPackage;
-
-      settings = {
-        global = {
-          audit_log = "/tmp/ssh-guard-audit.log";
-          audit_format = "logfmt";
-          help_text = ''
-            Allowed commands: echo
-          '';
-        };
-      };
-
-      profiles.main = {
-        managedUsers.testuser = {
-          authorizedKeyFiles = [ "${clientKey}/id_ed25519.pub" ];
-        };
+      services.openssh = {
+        enable = true;
         settings = {
-          rules = [
-            {
-              command = "echo";
-              args = [ "{string}" ];
-              action = {
-                type = "run";
-                binary = "${lib.getBin pkgs.coreutils}/bin/echo";
-                args = [ ];
-                timeout = "5s";
-              };
-            }
-          ];
+          PasswordAuthentication = false;
+          PermitRootLogin = "no";
         };
       };
-    };
 
-    users.users.testuser = {
-      isNormalUser = true;
-      home = "/home/testuser";
-      shell = pkgs.bash;
-    };
+      services.ssh-guard = {
+        enable = true;
+        package = sshGuardPackage;
 
-    environment.etc."ssh-guard-test/id_ed25519".source = "${clientKey}/id_ed25519";
-  };
+        settings = {
+          global = {
+            audit_log = "/var/log/ssh-guard-audit.log";
+            audit_format = "logfmt";
+            help_text = ''
+              Allowed commands: echo
+            '';
+          };
+        };
+
+        profiles.main = {
+          users = [ "testuser" ];
+          settings = {
+            rules = [
+              {
+                command = "echo";
+                args = [ "{string}" ];
+                action = {
+                  type = "run";
+                  binary = "${lib.getBin pkgs.coreutils}/bin/echo";
+                  args = [ ];
+                  timeout = "5s";
+                };
+              }
+            ];
+          };
+        };
+      };
+
+      users.users.testuser = {
+        isNormalUser = true;
+        home = "/home/testuser";
+        openssh.authorizedKeys.keyFiles = [ "${clientKey}/id_ed25519.pub" ];
+      };
+
+      environment.etc."ssh-guard-test/id_ed25519".source = "${clientKey}/id_ed25519";
+    };
 
   testScript = ''
     server.start()
@@ -105,7 +108,7 @@ testers.runNixOSTest {
       assert rc != 0, f"case variant should be denied, got rc={rc}"
 
     with subtest("audit log records allowed and denied attempts"):
-      audit_text = server.succeed("cat /tmp/ssh-guard-audit.log")
+      audit_text = server.succeed("cat /var/log/ssh-guard-audit.log")
       assert "allowed" in audit_text, "audit log missing 'allowed' entry"
       assert "denied" in audit_text, "audit log missing 'denied' entry"
       assert "hello_from_ssh_guard" in audit_text, "audit log missing command text"
@@ -118,7 +121,7 @@ testers.runNixOSTest {
         assert rc != 0, f"whoami should be denied on attempt {i}"
 
     with subtest("audit log grew with burst entries"):
-      audit_wc = server.succeed("wc -l /tmp/ssh-guard-audit.log")
+      audit_wc = server.succeed("wc -l /var/log/ssh-guard-audit.log")
       line_count = int(audit_wc.strip().split()[0])
       assert line_count >= 13, f"audit log too small: {line_count} lines (expected >= 13)"
   '';
