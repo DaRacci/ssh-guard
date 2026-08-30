@@ -1,5 +1,10 @@
 use log::LevelFilter;
 
+/// Initialize syslog-backed logging for `ssh-guard`.
+///
+/// # Errors
+///
+/// Returns an error if syslog cannot be opened or global logger setup fails.
 pub fn init(tag: &str) -> Result<(), Box<dyn std::error::Error>> {
     let formatter = syslog::Formatter3164 {
         facility: syslog::Facility::LOG_AUTH,
@@ -22,10 +27,6 @@ mod tests {
 
     #[test]
     fn init_syslog() {
-        let result = init("ssh-guard-test");
-        match result {
-            Ok(()) => {}
-            Err(_) => {}
-        }
+        let _ = init("ssh-guard-test");
     }
 }

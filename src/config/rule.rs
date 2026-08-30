@@ -8,7 +8,7 @@ pub struct Rule {
 
     /// The first token users must type to match this rule.
     /// For `Run` actions this defaults to the binary filename if unset.
-    /// Required for non-Run actions (read_file, show_help, etc.).
+    /// Required for non-`Run` actions (`read_file`, `show_help`, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
@@ -40,6 +40,7 @@ pub struct Rule {
 }
 
 impl Rule {
+    #[must_use]
     pub fn binary_path(&self) -> Option<&str> {
         match &self.action {
             Action::Run { binary, .. } => Some(binary.as_str()),
@@ -48,7 +49,8 @@ impl Rule {
     }
 
     /// Resolve the command name for this rule.
-    /// Returns the explicit `command` field, or derives from binary filename for Run actions.
+    /// Returns the explicit `command` field, or derives from binary filename for `Run` actions.
+    #[must_use]
     pub fn command_name(&self) -> Option<&str> {
         if let Some(ref cmd) = self.command {
             return Some(cmd.as_str());
@@ -73,6 +75,7 @@ mod tests {
     use super::*;
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
+    use crate::config::duration::Duration;
 
     #[test]
     fn test_command_name_from_explicit() {
@@ -80,7 +83,7 @@ mod tests {
             action: Action::Run {
                 binary: "/usr/bin/git".into(),
                 args: vec![],
-                timeout: Default::default(),
+                timeout: Duration::default(),
             },
             command: Some("git".into()),
             implicit_symlinks: true,
@@ -100,7 +103,7 @@ mod tests {
             action: Action::Run {
                 binary: "/usr/bin/systemctl".into(),
                 args: vec![],
-                timeout: Default::default(),
+                timeout: Duration::default(),
             },
             command: None,
             implicit_symlinks: true,
@@ -152,7 +155,7 @@ mod tests {
             action: Action::Run {
                 binary: "/".into(),
                 args: vec![],
-                timeout: Default::default(),
+                timeout: Duration::default(),
             },
             command: None,
             implicit_symlinks: true,

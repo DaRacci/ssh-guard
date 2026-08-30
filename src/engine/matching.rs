@@ -7,6 +7,11 @@ use super::validate::validate_template_value;
 use crate::config::{Config, rule::Rule, subcommand::Subcommand};
 use crate::errors::{GuardError, MatchFailure};
 
+/// Match user argv against configured rule tree.
+///
+/// # Errors
+///
+/// Returns `GuardError::NoMatch` when no rule matches `argv`.
 pub fn match_command(config: &Config, argv: &[String]) -> Result<MatchResult, GuardError> {
     let mut all_failures: Vec<MatchFailure> = Vec::new();
 
@@ -76,7 +81,7 @@ pub(crate) fn try_match_rule(
                     &[],
                     0,
                     &argv[0],
-                    &format!("expected '{}'", cmd),
+                    &format!("expected '{cmd}'"),
                 );
                 return Err(());
             }
@@ -97,7 +102,7 @@ pub(crate) fn try_match_rule(
                 subcommand_path: vec![],
             });
         }
-        let last = argv.last().map(|s| s.as_str()).unwrap_or("");
+        let last = argv.last().map_or("", String::as_str);
         record_failure(
             failures,
             rule_idx,
@@ -210,6 +215,7 @@ pub(crate) fn walk_subcommands(
     Err(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_subcommands_nested(
     rule_idx: usize,
     rule: &Rule,
@@ -237,12 +243,13 @@ pub(crate) fn walk_subcommands_nested(
             argv, i, &sub_flags, sub_style, rule_idx, &new_path, failures,
         );
 
-        if !sub.subcommands.is_empty() && i < argv.len() {
-            if sub.subcommands.iter().any(|n| n.name == argv[i]) {
-                return walk_subcommands_nested(
-                    rule_idx, rule, config, argv, i, &new_path, sub, failures,
-                );
-            }
+        if !sub.subcommands.is_empty()
+            && i < argv.len()
+            && sub.subcommands.iter().any(|n| n.name == argv[i])
+        {
+            return walk_subcommands_nested(
+                rule_idx, rule, config, argv, i, &new_path, sub, failures,
+            );
         }
 
         return match_remaining_args(rule_idx, config, argv, i, &new_path, sub, failures);
@@ -259,20 +266,24 @@ pub(crate) fn walk_subcommands_nested(
     Err(())
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) fn match_remaining_args_inner(
     rule_idx: usize,
     config: &Config,
     argv: &[String],
     start: usize,
     path: &[String],
-    args: &[String],
+    allowed_args: &[String],
     style: &crate::config::arg::ArgStyle,
     failures: &mut Vec<MatchFailure>,
 ) -> Result<MatchResult, ()> {
     let mut captures: HashMap<String, String> = HashMap::new();
     let mut arg_counter: usize = 0;
 
-    let patterns: Vec<ArgPattern> = args.iter().map(|a| parse_arg_pattern(a)).collect();
+    let patterns: Vec<ArgPattern> = allowed_args
+        .iter()
+        .map(|arg| parse_arg_pattern(arg))
+        .collect();
 
     let mut i = start;
     let mut has_error = false;
@@ -322,7 +333,7 @@ pub(crate) fn match_remaining_args_inner(
                             record_failure(failures, rule_idx, path, i, token, &reason);
                             has_error = true;
                         }
-                        captures.insert(cap_name, token.to_string());
+                        captures.insert(cap_name, token.clone());
                         matched = true;
                         i += 1;
                         break;
@@ -334,19 +345,19 @@ pub(crate) fn match_remaining_args_inner(
                     template,
                 } => {
                     let mut works = true;
-                    if let Some(p) = prefix {
-                        if !token.starts_with(p.as_str()) {
-                            works = false;
-                        }
+                    if let Some(p) = prefix
+                        && !token.starts_with(p.as_str())
+                    {
+                        works = false;
                     }
-                    if let Some(s) = suffix {
-                        if !token.ends_with(s.as_str()) {
-                            works = false;
-                        }
+                    if let Some(s) = suffix
+                        && !token.ends_with(s.as_str())
+                    {
+                        works = false;
                     }
                     if works {
-                        let base_start = prefix.as_ref().map_or(0, |p| p.len());
-                        let base_end = token.len() - suffix.as_ref().map_or(0, |s| s.len());
+                        let base_start = prefix.as_ref().map_or(0, String::len);
+                        let base_end = token.len() - suffix.as_ref().map_or(0, String::len);
                         if base_start < base_end {
                             let base = &token[base_start..base_end];
                             let cap_name = capture_name(template, &mut arg_counter);
@@ -407,13 +418,12 @@ pub(crate) fn match_remaining_args(
 }
 
 pub(crate) fn capture_name(template: &TemplateType, counter: &mut usize) -> String {
-    match template {
-        TemplateType::ContractRef(name) => name.clone(),
-        _ => {
-            let n = *counter;
-            *counter += 1;
-            format!("arg_{n}")
-        }
+    if let TemplateType::ContractRef(name) = template {
+        name.clone()
+    } else {
+        let n = *counter;
+        *counter += 1;
+        format!("arg_{n}")
     }
 }
 
@@ -425,9 +435,22 @@ mod tests {
         Config, action::Action, contract::Contract, duration::Duration, rule::Rule,
         subcommand::Subcommand,
     };
-    use crate::errors::GuardError;
+    use crate::errors::{GuardError, MatchFailure};
     use std::collections::HashMap;
 
+    fn no_match_failures(err: GuardError) -> Vec<MatchFailure> {
+        assert!(
+            matches!(&err, GuardError::NoMatch { .. }),
+            "expected NoMatch, got {err:?}"
+        );
+        if let GuardError::NoMatch { failures, .. } = err {
+            failures
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn make_config() -> Config {
         Config {
             contracts: {
@@ -632,14 +655,9 @@ mod tests {
     fn test_flags_scoped_not_recursive() {
         let cfg = make_config();
         let argv = vec!["git".into(), "status".into(), "--oneline".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(!failures.is_empty());
-                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(!failures.is_empty());
+        assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
     }
 
     #[test]
@@ -655,13 +673,8 @@ mod tests {
     fn test_unknown_subcommand() {
         let cfg = make_config();
         let argv = vec!["bogus".to_string()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason.contains("expected")));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason.contains("expected")));
     }
 
     #[test]
@@ -673,14 +686,9 @@ mod tests {
             "--unknown".into(),
             "extra".into(),
         ];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(!failures.is_empty());
-                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(!failures.is_empty());
+        assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
     }
 
     #[test]
@@ -716,13 +724,8 @@ mod tests {
             subcommands: vec![],
         });
         let argv = vec!["bind".into(), "80".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason.contains("not in range")));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason.contains("not in range")));
     }
 
     #[test]
@@ -758,13 +761,8 @@ mod tests {
             subcommands: vec![],
         });
         let argv = vec!["svc-check".into(), "ftp".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason.contains("not in")));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason.contains("not in")));
     }
 
     #[test]
@@ -830,10 +828,13 @@ mod tests {
             },
         );
         cfg.rules[0].subcommands[0].args = vec!["--{unit}".into()];
-        let argv = vec!["git", "status", "--sshd"];
+        let argv = ["git", "status", "--sshd"];
         let result = match_command(
             &cfg,
-            &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &argv
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
         )
         .unwrap();
         assert_eq!(result.captures.get("unit"), Some(&"sshd".to_string()));
@@ -849,10 +850,13 @@ mod tests {
             },
         );
         cfg.rules[0].subcommands[0].args = vec!["--unit.{unit}.timer".into()];
-        let argv = vec!["git", "status", "--unit.sshd.timer"];
+        let argv = ["git", "status", "--unit.sshd.timer"];
         let result = match_command(
             &cfg,
-            &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &argv
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
         )
         .unwrap();
         assert_eq!(result.captures.get("unit"), Some(&"sshd".to_string()));
@@ -868,9 +872,9 @@ mod tests {
             },
         );
         cfg.rules[0].subcommands[0].args = vec!["--{unit}".into()];
-        let argv: Vec<String> = vec!["git", "status", "--bad"]
+        let argv: Vec<String> = ["git", "status", "--bad"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let result = match_command(&cfg, &argv);
         assert!(result.is_err());
@@ -886,9 +890,9 @@ mod tests {
             },
         );
         cfg.rules[0].subcommands[0].args = vec!["--{unit}".into()];
-        let argv: Vec<String> = vec!["git", "status", "sshd"]
+        let argv: Vec<String> = ["git", "status", "sshd"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let result = match_command(&cfg, &argv);
         assert!(result.is_err());
@@ -1076,30 +1080,20 @@ mod tests {
             subcommands: vec![],
         });
         let argv = vec!["check".into(), "80".into(), "99999".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(
-                    failures.len() >= 2,
-                    "expected at least 2 failures, got {failures:?}"
-                );
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(
+            failures.len() >= 2,
+            "expected at least 2 failures, got {failures:?}"
+        );
     }
 
     #[test]
     fn test_match_command_empty_argv() {
         let cfg = make_config();
         let argv: Vec<String> = vec![];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(!failures.is_empty());
-                assert!(failures.iter().any(|f| f.reason == "empty command"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(!failures.is_empty());
+        assert!(failures.iter().any(|f| f.reason == "empty command"));
     }
 
     #[test]
@@ -1135,17 +1129,12 @@ mod tests {
     fn test_no_args_after_command_with_subcommands() {
         let cfg = make_config();
         let argv = vec!["git".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(
-                    failures
-                        .iter()
-                        .any(|f| f.reason == "no arguments after command")
-                );
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.reason == "no arguments after command")
+        );
     }
 
     #[test]
@@ -1163,13 +1152,8 @@ mod tests {
             subcommands: vec![],
         });
         let argv = vec!["simple".into(), "extra".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason.contains("unexpected")));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason.contains("unexpected")));
     }
 
     #[test]
@@ -1213,13 +1197,8 @@ mod tests {
         let cfg = make_config();
         // "git bogus" - "bogus" is not a subcommand of git
         let argv = vec!["git".into(), "bogus".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason == "unknown subcommand"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason == "unknown subcommand"));
     }
 
     #[test]
@@ -1277,13 +1256,8 @@ mod tests {
         });
         // "--" gives base_start=2, base_end=2 → 2 < 2 → false, no capture
         let argv = vec!["t-empty".into(), "--".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
     }
 
     #[test]
@@ -1302,13 +1276,8 @@ mod tests {
         });
         // prefix="--" matches, suffix=".service" doesn't match "--foo.bad"
         let argv = vec!["t-suffix".into(), "--foo.bad".into()];
-        let err = match_command(&cfg, &argv).unwrap_err();
-        match err {
-            GuardError::NoMatch { failures, .. } => {
-                assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
-            }
-            other => panic!("expected NoMatch, got {other:?}"),
-        }
+        let failures = no_match_failures(match_command(&cfg, &argv).unwrap_err());
+        assert!(failures.iter().any(|f| f.reason == "not in allowed args"));
     }
 
     #[test]

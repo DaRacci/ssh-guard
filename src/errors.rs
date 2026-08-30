@@ -7,7 +7,7 @@ pub type Result<T> = std::result::Result<T, GuardError>;
 pub struct MatchFailure {
     pub rule_index: usize,
 
-    /// e.g. ["git", "remote"] means we got past "git" then "remote" but failed deeper.
+    /// e.g. `["git", "remote"]` means we got past `git` then `remote` but failed deeper.
     pub subcommand_path: Vec<String>,
 
     pub at_token: usize,
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn guard_error_io() {
-        let inner = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+        let inner = std::io::Error::other("disk full");
         let e = GuardError::Io(inner);
         assert_eq!(e.to_string(), "IO error: disk full");
     }
@@ -213,7 +213,7 @@ mod tests {
         let debug2 = format!("{e2:?}");
         assert!(debug2.contains("NoCommand"));
 
-        let e3 = GuardError::Io(std::io::Error::new(std::io::ErrorKind::Other, "err"));
+        let e3 = GuardError::Io(std::io::Error::other("err"));
         let debug3 = format!("{e3:?}");
         assert!(debug3.contains("Io"));
     }

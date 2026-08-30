@@ -11,10 +11,10 @@ pub struct AuditEvent {
     /// Unique id for this invocation.
     pub session_id: String,
 
-    /// The Unix username that ran the command (from SSH).
+    /// The Unix username that ran the command
     pub user: String,
 
-    /// The full SSH_ORIGINAL_COMMAND string.
+    /// The full `SSH_ORIGINAL_COMMAND` string.
     pub command: String,
 
     /// "allowed" or "denied".
@@ -39,6 +39,7 @@ pub struct AuditEvent {
 
 impl AuditEvent {
     /// Announce that an allowed command is about to be executed.
+    #[must_use]
     pub fn started(
         user: &str,
         command: &str,
@@ -59,6 +60,7 @@ impl AuditEvent {
         }
     }
 
+    #[must_use]
     pub fn allowed(
         user: &str,
         command: &str,
@@ -80,6 +82,7 @@ impl AuditEvent {
         }
     }
 
+    #[must_use]
     pub fn denied(
         user: &str,
         command: &str,
@@ -108,6 +111,10 @@ impl AuditEvent {
     }
 
     /// Append this event to the audit log file.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if serialization fails or file append/write fails.
     pub fn write_to(
         &self,
         path: &str,
@@ -141,7 +148,7 @@ impl AuditEvent {
             parts.push(format!("exit_code={code}"));
         }
         if let Some(ref d) = self.detail {
-            parts.push(format!("detail=\"{}\"", d));
+            parts.push(format!("detail=\"{d}\""));
         }
         if let Some(ref f) = self.failures {
             parts.push(format!("failures=\"{}\"", f.join("; ")));
@@ -150,7 +157,7 @@ impl AuditEvent {
     }
 }
 
-/// Get current time as ISO 8601 string without relying on an external crate.
+/// Get current time as ISO 8601 string.
 pub(crate) fn chrono_now() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -178,9 +185,9 @@ pub(crate) fn format_unix_time(secs: u64) -> String {
     let minutes = (time_of_day % 3600) / 60;
     let seconds = time_of_day % 60;
 
-    // Convert days to year/month/day (approximate, no leap-second handling)
+    // Convert days to year/month/day
     let mut y = 1970i64;
-    let mut remaining_days = days as i64;
+    let mut remaining_days = i64::try_from(days).unwrap_or(i64::MAX);
 
     loop {
         let days_in_year = if is_leap(y) { 366 } else { 365 };
@@ -191,7 +198,7 @@ pub(crate) fn format_unix_time(secs: u64) -> String {
         y += 1;
     }
 
-    let month_days = if is_leap(y) {
+    let month_days: [i64; 12] = if is_leap(y) {
         [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -199,19 +206,16 @@ pub(crate) fn format_unix_time(secs: u64) -> String {
 
     let mut m = 0usize;
     for (i, &md) in month_days.iter().enumerate() {
-        if remaining_days < md as i64 {
+        if remaining_days < md {
             m = i + 1;
             break;
         }
-        remaining_days -= md as i64;
+        remaining_days -= md;
     }
 
-    let d = remaining_days as u64 + 1;
+    let d = u64::try_from(remaining_days).map_or(1, |day| day + 1);
 
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y, m, d, hours, minutes, seconds
-    )
+    format!("{y:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 pub(crate) fn is_leap(y: i64) -> bool {
@@ -307,12 +311,10 @@ mod tests {
     fn test_timestamp_format() {
         let ts = chrono_now();
         // Should look like ISO 8601
-        assert!(ts.contains("T"));
-        assert!(ts.ends_with("Z"));
-        assert_eq!(ts.len(), 20); // "YYYY-MM-DDTHH:MM:SSZ"
+        assert!(ts.contains('T'));
+        assert!(ts.ends_with('Z'));
+        assert_eq!(ts.len(), 20);
     }
-
-    // -- format_unix_time ---------------------------------------------------
 
     #[test]
     fn test_format_unix_time_epoch() {
@@ -331,36 +333,29 @@ mod tests {
 
     #[test]
     fn test_format_unix_time_leap_year_2000() {
-        // 951782400 = 2000-02-29T00:00:00Z (leap year, Feb has 29 days)
-        assert_eq!(format_unix_time(951782400), "2000-02-29T00:00:00Z");
+        assert_eq!(format_unix_time(951_782_400), "2000-02-29T00:00:00Z");
     }
 
     #[test]
     fn test_format_unix_time_non_leap_feb() {
-        // 2001-03-01T00:00:00Z = 983404800 (non-leap, Feb has 28 days)
-        assert_eq!(format_unix_time(983404800), "2001-03-01T00:00:00Z");
+        assert_eq!(format_unix_time(983_404_800), "2001-03-01T00:00:00Z");
     }
 
     #[test]
     fn test_format_unix_time_midnight_boundary() {
-        // Exactly one year after epoch: 1971-01-01T00:00:00Z
-        let secs = 365 * 86400; // 1970 is not a leap year
+        let secs = 365 * 86400;
         assert_eq!(format_unix_time(secs), "1971-01-01T00:00:00Z");
     }
 
     #[test]
     fn test_format_unix_time_leap_march_1() {
-        // Day after Feb 29 in leap year 2000: 2000-03-01T00:00:00Z
-        assert_eq!(format_unix_time(951868800), "2000-03-01T00:00:00Z");
+        assert_eq!(format_unix_time(951_868_800), "2000-03-01T00:00:00Z");
     }
 
     #[test]
     fn test_format_unix_time_one_day_before_leap_feb_29() {
-        // 951696000 = 2000-02-28T00:00:00Z (day before Feb 29 in leap year)
-        assert_eq!(format_unix_time(951696000), "2000-02-28T00:00:00Z");
+        assert_eq!(format_unix_time(951_696_000), "2000-02-28T00:00:00Z");
     }
-
-    // -- is_leap --------------------------------------------------------------
 
     #[test]
     fn test_is_leap_2000() {
@@ -394,23 +389,18 @@ mod tests {
 
     #[test]
     fn test_is_leap_2400() {
-        // Divisible by 400 → leap
         assert!(is_leap(2400));
     }
 
     #[test]
     fn test_is_leap_2100() {
-        // Divisible by 100 but not 400 → not leap
         assert!(!is_leap(2100));
     }
-
-    // -- denied with empty failures -----------------------------------------
 
     #[test]
     fn test_denied_empty_failures_no_failures_field() {
         let event = AuditEvent::denied("user", "cmd", "reason", &[], 1, "abc123", "sess-1");
         let json = serde_json::to_string(&event).unwrap();
-        // failures should be absent from JSON
         assert!(
             !json.contains("failures"),
             "empty failures vec should produce no 'failures' field, got: {json}"
@@ -432,8 +422,6 @@ mod tests {
         assert!(!line.contains("failures"));
     }
 
-    // -- write_to (actual file I/O) -----------------------------------------
-
     #[test]
     fn test_write_to_json() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -445,12 +433,11 @@ mod tests {
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let trimmed = contents.trim();
-        assert!(trimmed.starts_with("{"));
-        assert!(trimmed.ends_with("}"));
+        assert!(trimmed.starts_with('{'));
+        assert!(trimmed.ends_with('}'));
         assert!(trimmed.contains("\"bob\""));
         assert!(trimmed.contains("\"allowed\""));
 
-        // Append a second event
         let event2 = AuditEvent::allowed("alice", "pwd", "rule[0] pwd", 0, "abc123", "sess-2");
         event2.write_to(&path, &fmt).unwrap();
 

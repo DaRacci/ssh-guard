@@ -29,6 +29,7 @@ pub struct GlobalOverride {
 }
 
 impl GlobalOverride {
+    #[must_use]
     pub fn apply_to(&self, base: &Global) -> Global {
         Global {
             audit_log: self

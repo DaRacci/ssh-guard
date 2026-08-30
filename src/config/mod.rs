@@ -46,6 +46,11 @@ pub struct Config {
 }
 
 impl Config {
+    /// Load config from TOML file on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if file read fails or TOML parsing fails.
     pub fn from_file(path: &str) -> Result<Self, crate::errors::GuardError> {
         let data = std::fs::read_to_string(path).map_err(|e| {
             crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
@@ -53,24 +58,47 @@ impl Config {
         toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
     }
 
-    /// SHA-256 hex digest of the raw config file contents.
+    /// SHA-256 hex digest of raw config file contents.
     ///
-    /// Hashes the file bytes exactly as read, so it can be tested against `sha256sum <path>`.
+    /// Hashes file bytes exactly as read, so it can be tested against
+    /// `sha256sum <path>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if file read fails or digest formatting fails.
     pub fn sha256(path: &str) -> Result<String, crate::errors::GuardError> {
         use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+
         let data = std::fs::read(path).map_err(|e| {
             crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
         })?;
         let mut hasher = Sha256::new();
         hasher.update(&data);
         let digest = hasher.finalize();
-        Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            write!(&mut hex, "{byte:02x}").map_err(|e| {
+                crate::errors::GuardError::Config(format!("cannot format digest: {e}"))
+            })?;
+        }
+        Ok(hex)
     }
 
+    /// Serialize config to pretty TOML.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if TOML serialization fails.
     pub fn to_toml_string(&self) -> Result<String, crate::errors::GuardError> {
         toml::to_string_pretty(self).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
     }
 
+    /// Write config to TOML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if serialization or file write fails.
     pub fn write_to_file(&self, path: &str) -> Result<(), crate::errors::GuardError> {
         let toml_str = self.to_toml_string()?;
         std::fs::write(path, toml_str)?;
@@ -82,6 +110,10 @@ impl Config {
     /// - If no profile matches -> base config unchanged.
     /// - If exactly one profile matches -> merge base + profile.
     /// - If multiple profiles match -> returns error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` if more than one profile matches `user`.
     pub fn resolve_for_user(&self, user: &str) -> Result<Config, crate::errors::GuardError> {
         let matching: Vec<(&String, &Profile)> = self
             .profiles
@@ -106,7 +138,7 @@ impl Config {
         Ok(self.merge_profile(profile))
     }
 
-    /// Merge a single profile into this base config, returning a new Config.
+    /// Merge a single profile into this base config, returning a new `Config`.
     ///
     /// Merge rules:
     /// - `global`: field-wise override, profile fills unspecified fields from base.
@@ -116,6 +148,7 @@ impl Config {
     /// - `roots`: append unique values preserving base-first order.
     /// - `units`: append unique values preserving base-first order.
     /// - Unset profile sections leave base values intact.
+    #[must_use]
     pub fn merge_profile(&self, profile: &Profile) -> Config {
         let mut merged = self.clone();
 
@@ -160,7 +193,11 @@ impl Config {
     }
 
     /// Check for duplicate SSH usernames across all profiles.
-    /// Returns Ok(()) if no duplicates found, or Err with the duplicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` with duplicate user details if same username appears
+    /// in more than one profile.
     pub fn check_duplicate_users(&self) -> Result<(), crate::errors::GuardError> {
         let mut seen: HashMap<&str, &str> = HashMap::new(); // user -> first_profile_name
         for (pname, profile) in &self.profiles {
@@ -186,6 +223,43 @@ mod tests {
     use crate::config::duration::parse_duration;
 
     use super::*;
+
+    fn run_timeout(action: &Action) -> Option<u64> {
+        if let Action::Run { timeout, .. } = action {
+            Some(timeout.millis)
+        } else {
+            None
+        }
+    }
+
+    fn run_parts(action: &Action) -> Option<(String, Vec<String>, u64)> {
+        if let Action::Run {
+            binary,
+            args,
+            timeout,
+        } = action
+        {
+            Some((binary.clone(), args.clone(), timeout.millis))
+        } else {
+            None
+        }
+    }
+
+    fn tail_default_lines(action: &Action) -> Option<usize> {
+        if let Action::TailFile { default_lines, .. } = action {
+            Some(*default_lines)
+        } else {
+            None
+        }
+    }
+
+    fn int_range(contract: &Contract) -> Option<(i64, i64)> {
+        if let Contract::IntRange { min, max } = contract {
+            Some((*min, *max))
+        } else {
+            None
+        }
+    }
 
     #[test]
     fn test_parse_minimal_config() {
@@ -279,12 +353,7 @@ help_text = "allowed: git status, git log, git remote add"
 action = { type = "run", binary = "/bin/echo", args = [], timeout = "30s" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        match &cfg.rules[0].action {
-            Action::Run { timeout, .. } => {
-                assert_eq!(timeout.millis, 30_000);
-            }
-            _ => panic!("expected Run action"),
-        }
+        assert_eq!(run_timeout(&cfg.rules[0].action), Some(30_000));
     }
 
     #[test]
@@ -294,12 +363,7 @@ action = { type = "run", binary = "/bin/echo", args = [], timeout = "30s" }
 action = { type = "run", binary = "/bin/echo", args = [], timeout = 10000 }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        match &cfg.rules[0].action {
-            Action::Run { timeout, .. } => {
-                assert_eq!(timeout.millis, 10000);
-            }
-            _ => panic!("expected Run action"),
-        }
+        assert_eq!(run_timeout(&cfg.rules[0].action), Some(10_000));
     }
 
     #[test]
@@ -310,7 +374,7 @@ audit_log = "/custom/audit.log"
 audit_format = "logfmt"
 help_text = "Available: help"
 log_tag = "my-guard"
-max_read_bytes = 512000
+max_read_bytes = 512_000
 max_tail_lines = 1000
 default_tail_lines = 50
 
@@ -322,7 +386,7 @@ action = { type = "show_help" }
         assert_eq!(cfg.global.audit_format, AuditFormat::Logfmt);
         assert_eq!(cfg.global.help_text, "Available: help");
         assert_eq!(cfg.global.log_tag, "my-guard");
-        assert_eq!(cfg.global.max_read_bytes, 512000);
+        assert_eq!(cfg.global.max_read_bytes, 512_000);
         assert_eq!(cfg.global.max_tail_lines, 1000);
         assert_eq!(cfg.global.default_tail_lines, 50);
     }
@@ -349,13 +413,7 @@ action = { type = "show_help" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.contracts.len(), 3);
-        match &cfg.contracts["port"] {
-            Contract::IntRange { min, max } => {
-                assert_eq!(*min, 1024);
-                assert_eq!(*max, 65535);
-            }
-            _ => panic!("expected IntRange"),
-        }
+        assert_eq!(int_range(&cfg.contracts["port"]), Some((1024, 65_535)));
     }
 
     #[test]
@@ -366,18 +424,14 @@ action = { type = "run", binary = "/usr/bin/rsync", args = ["-a", "{string}"], t
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 1);
-        match &cfg.rules[0].action {
-            Action::Run {
-                binary,
-                args,
-                timeout,
-            } => {
-                assert_eq!(binary, "/usr/bin/rsync");
-                assert_eq!(args, &vec!["-a", "{string}"]);
-                assert_eq!(timeout.millis, 120_000);
-            }
-            _ => panic!("expected Run action"),
-        }
+        assert_eq!(
+            run_parts(&cfg.rules[0].action),
+            Some((
+                "/usr/bin/rsync".into(),
+                vec!["-a".into(), "{string}".into()],
+                120_000,
+            ))
+        );
     }
 
     #[test]
@@ -403,13 +457,7 @@ action = { type = "show_help" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 6);
-
-        match &cfg.rules[2].action {
-            Action::TailFile { default_lines, .. } => {
-                assert_eq!(*default_lines, 50);
-            }
-            _ => panic!("expected TailFile at index 2"),
-        }
+        assert_eq!(tail_default_lines(&cfg.rules[2].action), Some(50));
     }
 
     #[test]
@@ -557,18 +605,10 @@ arg_style = "dos"
         assert_eq!(deserialized.rules.len(), 1);
         let r = &deserialized.rules[0];
         assert_eq!(r.command, Some("test".into()));
-        match &r.action {
-            Action::Run {
-                binary,
-                args,
-                timeout,
-            } => {
-                assert_eq!(binary, "/bin/test");
-                assert_eq!(args, &vec!["{arg}".to_string()]);
-                assert_eq!(timeout.millis, 10000);
-            }
-            _ => panic!("expected Run"),
-        }
+        assert_eq!(
+            run_parts(&r.action),
+            Some(("/bin/test".into(), vec!["{arg}".into()], 10_000))
+        );
         assert_eq!(r.flag_groups, vec!["verbose"]);
         assert_eq!(r.flags, vec!["--debug"]);
         assert_eq!(r.args, vec!["{string}"]);
@@ -638,10 +678,10 @@ action = { type = "show_help" }
         assert_eq!(read_back.global.audit_log, "/tmp/write_test.log");
         assert_eq!(read_back.global.help_text, "write test");
         assert_eq!(read_back.rules.len(), 1);
-        match &read_back.rules[0].action {
-            Action::Run { binary, .. } => assert_eq!(binary, "/bin/ls"),
-            _ => panic!("expected Run"),
-        }
+        assert_eq!(
+            run_parts(&read_back.rules[0].action).map(|(binary, _, _)| binary),
+            Some("/bin/ls".into())
+        );
 
         drop(tmp);
     }
@@ -691,7 +731,7 @@ audit_log = "/tmp/test_inline.log"
 action = { type = "run", binary = "/bin/true" }
 "#;
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        write!(tmp, "{}", toml_content).unwrap();
+        write!(tmp, "{toml_content}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let cfg = Config::from_file(&path).unwrap();
         assert_eq!(cfg.global.audit_log, "/tmp/test_inline.log");
@@ -943,13 +983,7 @@ max = 9999
 
         let merged = base.merge_profile(&profile);
         assert_eq!(merged.contracts.len(), 1);
-        match &merged.contracts["port"] {
-            Contract::IntRange { min, max } => {
-                assert_eq!(*min, 1);
-                assert_eq!(*max, 9999);
-            }
-            _ => panic!("expected IntRange"),
-        }
+        assert_eq!(int_range(&merged.contracts["port"]), Some((1, 9_999)));
     }
 
     #[test]

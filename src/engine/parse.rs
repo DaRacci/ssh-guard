@@ -1,16 +1,17 @@
 use super::types::{ArgPattern, TemplateType};
 
 pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
-    if let Some(eq_pos) = raw.find("={") {
-        if eq_pos > 0 && raw.ends_with('}') {
-            let flag = &raw[..eq_pos];
-            let inner = &raw[eq_pos + 2..raw.len() - 1];
-            let tmpl = parse_template_type(inner);
-            return ArgPattern::InlineFlag {
-                flag: flag.to_string(),
-                template: tmpl,
-            };
-        }
+    if let Some(eq_pos) = raw.find("={")
+        && eq_pos > 0
+        && raw.ends_with('}')
+    {
+        let flag = &raw[..eq_pos];
+        let inner = &raw[eq_pos + 2..raw.len() - 1];
+        let tmpl = parse_template_type(inner);
+        return ArgPattern::InlineFlag {
+            flag: flag.to_string(),
+            template: tmpl,
+        };
     }
 
     if raw.starts_with('{') && raw.ends_with('}') && raw.len() > 2 {
@@ -18,29 +19,29 @@ pub(crate) fn parse_arg_pattern(raw: &str) -> ArgPattern {
         return ArgPattern::Template(parse_template_type(inner));
     }
 
-    if let Some(open) = raw.find('{') {
-        if let Some(close) = raw[open..].find('}') {
-            let abs_close = open + close;
-            let template_inner = &raw[open + 1..abs_close];
+    if let Some(open) = raw.find('{')
+        && let Some(close) = raw[open..].find('}')
+    {
+        let abs_close = open + close;
+        let template_inner = &raw[open + 1..abs_close];
 
-            let prefix = if open > 0 {
-                Some(raw[..open].to_string())
-            } else {
-                None
-            };
-            let suffix = if abs_close + 1 < raw.len() {
-                Some(raw[abs_close + 1..].to_string())
-            } else {
-                None
-            };
+        let prefix = if open > 0 {
+            Some(raw[..open].to_string())
+        } else {
+            None
+        };
+        let suffix = if abs_close + 1 < raw.len() {
+            Some(raw[abs_close + 1..].to_string())
+        } else {
+            None
+        };
 
-            if prefix.is_some() || suffix.is_some() {
-                return ArgPattern::TemplateContext {
-                    prefix,
-                    template: parse_template_type(template_inner),
-                    suffix,
-                };
-            }
+        if prefix.is_some() || suffix.is_some() {
+            return ArgPattern::TemplateContext {
+                prefix,
+                template: parse_template_type(template_inner),
+                suffix,
+            };
         }
     }
 
@@ -71,6 +72,45 @@ pub(crate) fn parse_single_template(s: &str) -> TemplateType {
 mod tests {
     use super::*;
 
+    fn template_types(pattern: ArgPattern) -> Option<Vec<TemplateType>> {
+        if let ArgPattern::Template(TemplateType::Union(types)) = pattern {
+            Some(types)
+        } else {
+            None
+        }
+    }
+
+    fn contract_ref_name(pattern: ArgPattern) -> Option<String> {
+        if let ArgPattern::Template(TemplateType::ContractRef(name)) = pattern {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    fn inline_flag(pattern: ArgPattern) -> Option<(String, TemplateType)> {
+        if let ArgPattern::InlineFlag { flag, template } = pattern {
+            Some((flag, template))
+        } else {
+            None
+        }
+    }
+
+    fn template_context(
+        pattern: ArgPattern,
+    ) -> Option<(Option<String>, TemplateType, Option<String>)> {
+        if let ArgPattern::TemplateContext {
+            prefix,
+            template,
+            suffix,
+        } = pattern
+        {
+            Some((prefix, template, suffix))
+        } else {
+            None
+        }
+    }
+
     #[test]
     fn test_parse_template_builtins() {
         let pattern_str = parse_arg_pattern("{string}");
@@ -94,37 +134,22 @@ mod tests {
     #[test]
     fn test_parse_template_union() {
         let p = parse_arg_pattern("{int|string}");
-        match p {
-            ArgPattern::Template(TemplateType::Union(types)) => {
-                assert_eq!(types.len(), 2);
-                assert_eq!(types[0], TemplateType::Int);
-                assert_eq!(types[1], TemplateType::String);
-            }
-            _ => panic!("expected Union"),
-        }
+        assert_eq!(
+            template_types(p),
+            Some(vec![TemplateType::Int, TemplateType::String])
+        );
     }
 
     #[test]
     fn test_parse_template_contract() {
         let p = parse_arg_pattern("{port}");
-        match p {
-            ArgPattern::Template(TemplateType::ContractRef(name)) => {
-                assert_eq!(name, "port");
-            }
-            _ => panic!("expected ContractRef"),
-        }
+        assert_eq!(contract_ref_name(p), Some("port".into()));
     }
 
     #[test]
     fn test_parse_inline_flag() {
         let p = parse_arg_pattern("--depth={int}");
-        match p {
-            ArgPattern::InlineFlag { flag, template } => {
-                assert_eq!(flag, "--depth");
-                assert_eq!(template, TemplateType::Int);
-            }
-            _ => panic!("expected InlineFlag"),
-        }
+        assert_eq!(inline_flag(p), Some(("--depth".into(), TemplateType::Int)));
     }
 
     #[test]
@@ -136,35 +161,23 @@ mod tests {
     #[test]
     fn test_parse_template_suffix() {
         let p = parse_arg_pattern("{unit}.service");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, None);
-                assert_eq!(template, TemplateType::ContractRef("unit".into()));
-                assert_eq!(suffix, Some(".service".into()));
-            }
-            _ => panic!("expected TemplateContext, got {:?}", p),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((
+                None,
+                TemplateType::ContractRef("unit".into()),
+                Some(".service".into()),
+            ))
+        );
     }
 
     #[test]
     fn test_parse_template_suffix_numeric() {
         let p = parse_arg_pattern("{int}ms");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, None);
-                assert_eq!(template, TemplateType::Int);
-                assert_eq!(suffix, Some("ms".into()));
-            }
-            _ => panic!("expected TemplateContext"),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((None, TemplateType::Int, Some("ms".into())))
+        );
     }
 
     #[test]
@@ -176,35 +189,27 @@ mod tests {
     #[test]
     fn test_parse_template_context_prefix_only() {
         let p = parse_arg_pattern("--{unit}");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, Some("--".into()));
-                assert_eq!(template, TemplateType::ContractRef("unit".into()));
-                assert_eq!(suffix, None);
-            }
-            _ => panic!("expected TemplateContext, got {:?}", p),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((
+                Some("--".into()),
+                TemplateType::ContractRef("unit".into()),
+                None
+            ))
+        );
     }
 
     #[test]
     fn test_parse_template_context_both_sides() {
         let p = parse_arg_pattern("--{unit}.service");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, Some("--".into()));
-                assert_eq!(template, TemplateType::ContractRef("unit".into()));
-                assert_eq!(suffix, Some(".service".into()));
-            }
-            _ => panic!("expected TemplateContext, got {:?}", p),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((
+                Some("--".into()),
+                TemplateType::ContractRef("unit".into()),
+                Some(".service".into()),
+            ))
+        );
     }
 
     #[test]
@@ -222,83 +227,50 @@ mod tests {
     #[test]
     fn test_parse_template_nested_brace() {
         let p = parse_arg_pattern("{a{b}}");
-        match p {
-            ArgPattern::Template(TemplateType::ContractRef(name)) => {
-                assert_eq!(name, "a{b}");
-            }
-            _ => panic!("expected Template(ContractRef), got {p:?}"),
-        }
+        assert_eq!(contract_ref_name(p), Some("a{b}".into()));
     }
 
     #[test]
     fn test_parse_template_contract_not_defined() {
         let p = parse_arg_pattern("{mycontract}");
-        match p {
-            ArgPattern::Template(TemplateType::ContractRef(name)) => {
-                assert_eq!(name, "mycontract");
-            }
-            _ => panic!("expected ContractRef"),
-        }
+        assert_eq!(contract_ref_name(p), Some("mycontract".into()));
     }
 
     #[test]
     fn test_parse_inline_flag_dos() {
         let p = parse_arg_pattern("/flag:{int}");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, Some("/flag:".into()));
-                assert_eq!(template, TemplateType::Int);
-                assert_eq!(suffix, None);
-            }
-            _ => panic!("expected TemplateContext, got {p:?}"),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((Some("/flag:".into()), TemplateType::Int, None))
+        );
     }
 
     #[test]
     fn test_parse_union_three_types() {
         let p = parse_arg_pattern("{int|string|any}");
-        match p {
-            ArgPattern::Template(TemplateType::Union(types)) => {
-                assert_eq!(types.len(), 3);
-                assert_eq!(types[0], TemplateType::Int);
-                assert_eq!(types[1], TemplateType::String);
-                assert_eq!(types[2], TemplateType::Any);
-            }
-            _ => panic!("expected Union of 3"),
-        }
+        assert_eq!(
+            template_types(p),
+            Some(vec![
+                TemplateType::Int,
+                TemplateType::String,
+                TemplateType::Any
+            ])
+        );
     }
 
     #[test]
     fn test_parse_template_context_prefix_with_special_chars() {
         let p = parse_arg_pattern("--flag={int}");
-        match p {
-            ArgPattern::InlineFlag { flag, template } => {
-                assert_eq!(flag, "--flag");
-                assert_eq!(template, TemplateType::Int);
-            }
-            _ => panic!("expected InlineFlag, got {p:?}"),
-        }
+        assert_eq!(inline_flag(p), Some(("--flag".into(), TemplateType::Int)));
     }
 
     #[test]
     fn test_parse_template_context_empty_prefix() {
         let p = parse_arg_pattern("{int}extra");
-        match p {
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                assert_eq!(prefix, None);
-                assert_eq!(template, TemplateType::Int);
-                assert_eq!(suffix, Some("extra".into()));
-            }
-            _ => panic!("expected TemplateContext, got {p:?}"),
-        }
+        assert_eq!(
+            template_context(p),
+            Some((None, TemplateType::Int, Some("extra".into())))
+        );
     }
 
     #[test]

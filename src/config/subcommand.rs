@@ -6,11 +6,11 @@ use crate::config::arg::ArgStyle;
 pub struct Subcommand {
     pub name: String,
 
-    /// Override arg_style for this subcommand level (inherits parent if None).
+    /// Override `arg_style` for this subcommand level (inherits parent if `None`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg_style: Option<ArgStyle>,
 
-    /// Flag-group names to resolve from Config.flag_groups.
+    /// Flag-group names to resolve from `Config.flag_groups`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flag_groups: Vec<String>,
 
