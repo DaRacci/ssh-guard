@@ -2,6 +2,26 @@ use crate::config::audit::AuditFormat;
 use serde::Serialize;
 use std::io::Write;
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditResult {
+    Started {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    Allowed {
+        exit_code: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    Denied {
+        exit_code: i32,
+        reason: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failures: Vec<String>,
+    },
+}
+
 /// A single audit event written to the audit log.
 #[derive(Debug, Serialize)]
 pub struct AuditEvent {
@@ -17,21 +37,8 @@ pub struct AuditEvent {
     /// The full `SSH_ORIGINAL_COMMAND` string.
     pub command: String,
 
-    /// "allowed" or "denied".
-    pub result: String,
-
-    /// For allowed: the rule + subcommand path.
-    /// For denied: the rejection reason.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-
-    /// For denied: list of attempted match failures (serialized as JSON array).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failures: Option<Vec<String>>,
-
-    /// Exit code of the command. Absent for a "started" event.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
+    /// The status of the command and its result details.
+    pub status: AuditResult,
 
     /// SHA-256 hex digest of the config file contents the command ran against.
     pub config_hash: String,
@@ -52,10 +59,9 @@ impl AuditEvent {
             session_id: session_id.into(),
             user: user.into(),
             command: command.into(),
-            result: "started".into(),
-            detail: Some(detail.into()),
-            failures: None,
-            exit_code: None,
+            status: AuditResult::Started {
+                detail: Some(detail.into()),
+            },
             config_hash: config_hash.into(),
         }
     }
@@ -74,10 +80,10 @@ impl AuditEvent {
             session_id: session_id.into(),
             user: user.into(),
             command: command.into(),
-            result: "allowed".into(),
-            detail: Some(detail.into()),
-            failures: None,
-            exit_code: Some(exit_code),
+            status: AuditResult::Allowed {
+                exit_code,
+                detail: Some(detail.into()),
+            },
             config_hash: config_hash.into(),
         }
     }
@@ -102,10 +108,11 @@ impl AuditEvent {
             session_id: session_id.into(),
             user: user.into(),
             command: command.into(),
-            result: "denied".into(),
-            detail: Some(reason.into()),
-            failures: f,
-            exit_code: Some(exit_code),
+            status: AuditResult::Denied {
+                exit_code,
+                reason: reason.into(),
+                failures: f.clone().unwrap_or_default(),
+            },
             config_hash: config_hash.into(),
         }
     }
@@ -141,18 +148,40 @@ impl AuditEvent {
             format!("session_id={}", self.session_id),
             format!("user={}", self.user),
             format!("command=\"{}\"", self.command),
-            format!("result={}", self.result),
             format!("config_hash={}", self.config_hash),
         ];
-        if let Some(code) = self.exit_code {
-            parts.push(format!("exit_code={code}"));
+
+        match &self.status {
+            AuditResult::Started { detail } => {
+                parts.extend([
+                    format!("status=started"),
+                    format!("status.detail=\"{}\"", detail.as_deref().unwrap_or("")),
+                ]);
+            }
+            AuditResult::Allowed { exit_code, detail } => {
+                parts.extend([
+                    format!("status=allowed"),
+                    format!("status.exit_code={exit_code}"),
+                    format!("status.detail=\"{}\"", detail.as_deref().unwrap_or("")),
+                ]);
+            }
+            AuditResult::Denied {
+                exit_code,
+                reason,
+                failures,
+            } => {
+                parts.extend([
+                    format!("status=denied"),
+                    format!("status.exit_code={exit_code}"),
+                    format!("status.reason=\"{}\"", reason),
+                ]);
+
+                if !failures.is_empty() {
+                    parts.push(format!("status.failures=\"{}\"", failures.join("; ")));
+                }
+            }
         }
-        if let Some(ref d) = self.detail {
-            parts.push(format!("detail=\"{d}\""));
-        }
-        if let Some(ref f) = self.failures {
-            parts.push(format!("failures=\"{}\"", f.join("; ")));
-        }
+
         parts.join(" ")
     }
 }
@@ -244,9 +273,9 @@ mod tests {
         assert!(json.contains("\"config_hash\":\"abc123\""));
 
         let line = event.to_logfmt();
-        assert!(line.contains("result=started"));
+        assert!(line.contains("status=started"));
         assert!(line.contains("session_id=sess-1"));
-        assert!(!line.contains("exit_code"));
+        assert!(!line.contains("status.exit_code"));
     }
 
     #[test]
@@ -301,10 +330,10 @@ mod tests {
         let line = event.to_logfmt();
         assert!(line.starts_with("ts="));
         assert!(line.contains("user=agent"));
-        assert!(line.contains("result=allowed"));
         assert!(line.contains("session_id=sess-1"));
-        assert!(line.contains("exit_code=0"));
         assert!(line.contains("config_hash=abc123"));
+        assert!(line.contains("status=allowed"));
+        assert!(line.contains("status.exit_code=0"));
     }
 
     #[test]
@@ -412,6 +441,7 @@ mod tests {
         let failures = vec!["x".into(), "y".into()];
         let event = AuditEvent::denied("user", "cmd", "reason", &failures, 1, "abc123", "sess-1");
         let json = serde_json::to_string(&event).unwrap();
+        println!("json: {json}");
         assert!(json.contains("failures"));
     }
 
@@ -467,8 +497,8 @@ mod tests {
         let trimmed = contents.trim();
         assert!(trimmed.starts_with("ts="));
         assert!(trimmed.contains("user=mallory"));
-        assert!(trimmed.contains("result=denied"));
-        assert!(trimmed.contains("failures="));
+        assert!(trimmed.contains("status=denied"));
+        assert!(trimmed.contains("status.failures="));
     }
 
     #[test]
