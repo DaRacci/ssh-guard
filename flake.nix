@@ -44,8 +44,8 @@
       ];
 
       perSystem =
-        { pkgs, ... }:
-        rec {
+        { config, pkgs, ... }:
+        {
           packages.default = pkgs.callPackage ./nix/package.nix { inherit self inputs pkgs; };
 
           devenv.shells.default = {
@@ -80,16 +80,21 @@
             programs = {
               nixfmt.enable = true;
               statix.enable = true;
-              mdformat.enable = true;
+              mdformat = {
+                enable = true;
+                plugins = pkgs: [
+                  pkgs.mdformat-simple-breaks
+                ];
+              };
               rustfmt = {
                 enable = true;
-                package = devenv.shells.default.languages.rust.packages.rustfmt;
+                package = config.devenv.shells.default.languages.rust.toolchain.rustfmt;
               };
             };
           };
 
           packages.ssh-guard-vm = import ./nix/tests/ssh-guard-vm.nix { inherit self pkgs; };
-          checks.ssh-guard-vm = packages.ssh-guard-vm;
+          checks.ssh-guard-vm = config.packages.ssh-guard-vm;
         };
     };
 }
