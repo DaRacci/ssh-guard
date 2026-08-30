@@ -32,7 +32,10 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
     let match_result = match engine::match_command(&effective, &args) {
         Ok(m) => m,
         Err(GuardError::NoMatch { failures, .. }) => {
-            let failure_strings: Vec<String> = failures.iter().map(|f| f.to_string()).collect();
+            let failure_strings: Vec<String> = failures
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
             let event = AuditEvent::denied(
                 &user,
                 &raw,

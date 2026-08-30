@@ -111,30 +111,23 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::needless_borrows_for_generic_args,
-    clippy::panic,
-    clippy::unwrap_used
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_cli_parse_run() {
-        let cli =
-            Cli::try_parse_from(&["ssh-guard", "run", "--config", "/tmp/test-ssh-guard.toml"])
-                .unwrap();
-        match &cli.command {
-            Command::Run { config } => {
-                assert_eq!(config.as_deref(), Some("/tmp/test-ssh-guard.toml"));
-            }
-            _ => panic!("expected Run command"),
-        }
+        let cli = Cli::try_parse_from(["ssh-guard", "run", "--config", "/tmp/test-ssh-guard.toml"])
+            .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Command::Run { config } if config.as_deref() == Some("/tmp/test-ssh-guard.toml")
+        ));
     }
 
     #[test]
     fn test_cli_parse_add_rule() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "ssh-guard",
             "add-rule",
             "--config",
@@ -143,23 +136,18 @@ mod tests {
             "journalctl -n 10",
         ])
         .unwrap();
-        match &cli.command {
-            Command::AddRule {
-                config,
-                cmd,
-                profile,
-            } => {
-                assert_eq!(config.as_deref(), Some("/tmp/test-ssh-guard.toml"));
-                assert_eq!(cmd, "journalctl -n 10");
-                assert!(profile.is_none());
-            }
-            _ => panic!("expected AddRule command"),
-        }
+        assert!(matches!(
+            &cli.command,
+            Command::AddRule { config, cmd, profile }
+                if config.as_deref() == Some("/tmp/test-ssh-guard.toml")
+                    && cmd == "journalctl -n 10"
+                    && profile.is_none()
+        ));
     }
 
     #[test]
     fn test_cli_parse_add_rule_with_profile() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "ssh-guard",
             "add-rule",
             "--config",
@@ -170,62 +158,53 @@ mod tests {
             "admin",
         ])
         .unwrap();
-        match &cli.command {
-            Command::AddRule {
-                config,
-                cmd,
-                profile,
-            } => {
-                assert_eq!(config.as_deref(), Some("/tmp/test-ssh-guard.toml"));
-                assert_eq!(cmd, "journalctl -n 10");
-                assert_eq!(profile.as_deref(), Some("admin"));
-            }
-            _ => panic!("expected AddRule command"),
-        }
+        assert!(matches!(
+            &cli.command,
+            Command::AddRule { config, cmd, profile }
+                if config.as_deref() == Some("/tmp/test-ssh-guard.toml")
+                    && cmd == "journalctl -n 10"
+                    && profile.as_deref() == Some("admin")
+        ));
     }
 
     #[test]
     fn test_cli_parse_validate() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "ssh-guard",
             "validate",
             "--config",
             "/tmp/test-ssh-guard.toml",
         ])
         .unwrap();
-        match &cli.command {
-            Command::Validate { config } => {
-                assert_eq!(config.as_deref(), Some("/tmp/test-ssh-guard.toml"));
-            }
-            _ => panic!("expected Validate command"),
-        }
+        assert!(matches!(
+            &cli.command,
+            Command::Validate { config } if config.as_deref() == Some("/tmp/test-ssh-guard.toml")
+        ));
     }
 
     #[test]
     fn test_cli_parse_help() {
-        let cli =
-            Cli::try_parse_from(&["ssh-guard", "help", "--config", "/tmp/test.toml"]).unwrap();
-        match &cli.command {
+        let cli = Cli::try_parse_from(["ssh-guard", "help", "--config", "/tmp/test.toml"]).unwrap();
+        assert!(matches!(
+            &cli.command,
             Command::Help {
                 config,
                 profile,
                 tree,
                 verbose,
                 colour,
-            } => {
-                assert_eq!(config, "/tmp/test.toml");
-                assert!(profile.is_none());
-                assert!(!tree);
-                assert!(!verbose);
-                assert!(matches!(colour, crate::cli::help::ColourChoice::Auto));
             }
-            _ => panic!("expected Help command"),
-        }
+                if config == "/tmp/test.toml"
+                    && profile.is_none()
+                    && !tree
+                    && !verbose
+                    && matches!(colour, crate::cli::help::ColourChoice::Auto)
+        ));
     }
 
     #[test]
     fn test_cli_parse_help_with_all_flags() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "ssh-guard",
             "help",
             "--config",
@@ -238,22 +217,21 @@ mod tests {
             "always",
         ])
         .unwrap();
-        match &cli.command {
+        assert!(matches!(
+            &cli.command,
             Command::Help {
                 config,
                 profile,
                 tree,
                 verbose,
                 colour,
-            } => {
-                assert_eq!(config, "/tmp/test.toml");
-                assert_eq!(profile.as_deref(), Some("admin"));
-                assert!(*tree);
-                assert!(*verbose);
-                assert!(matches!(colour, crate::cli::help::ColourChoice::Always));
             }
-            _ => panic!("expected Help command"),
-        }
+                if config == "/tmp/test.toml"
+                    && profile.as_deref() == Some("admin")
+                    && *tree
+                    && *verbose
+                    && matches!(colour, crate::cli::help::ColourChoice::Always)
+        ));
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
         let profile_count = cfg
             .profiles
             .values()
-            .filter_map(|p| p.rules.as_ref().map(|r| r.len()))
+            .filter_map(|p| p.rules.as_ref().map(std::vec::Vec::len))
             .sum::<usize>();
         let total = count + profile_count;
         println!(
@@ -137,30 +137,26 @@ fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
             let path = std::path::Path::new(binary);
             if !path.exists() {
                 errors.push(format!(
-                    "{} rule[{i}]: binary '{binary}' does not exist",
-                    scope
+                    "{scope} rule[{i}]: binary '{binary}' does not exist"
                 ));
             } else if !rule.implicit_symlinks {
                 match std::fs::symlink_metadata(binary) {
                     Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
                         Ok(resolved) => {
                             errors.push(format!(
-                                    "{} rule[{i}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
-                                    scope,
-                                    resolved.display()
-                                ));
+                                "{scope} rule[{i}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
+                                resolved.display()
+                            ));
                         }
                         Err(_) => {
                             errors.push(format!(
-                                    "{} rule[{i}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)",
-                                    scope
-                                ));
+                                "{scope} rule[{i}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)"
+                            ));
                         }
                     },
                     Err(e) => {
                         errors.push(format!(
-                            "{} rule[{i}]: cannot stat binary '{binary}': {e}",
-                            scope
+                            "{scope} rule[{i}]: cannot stat binary '{binary}': {e}"
                         ));
                     }
                     _ => {}
@@ -193,7 +189,7 @@ implicit_symlinks = true
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
     #[test]
@@ -294,7 +290,7 @@ action = {{ type = "show_help" }}
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
     #[test]
@@ -318,7 +314,7 @@ action = {{ type = "show_help" }}
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
     #[test]
@@ -414,7 +410,7 @@ action = {{ type = "show_help" }}
         );
     }
 
-    /// Symlink to real target with implicit_symlinks=false should fail.
+    /// Symlink to real target with `implicit_symlinks=false` should fail.
     #[test]
     fn test_validate_symlink_to_real_target_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -452,7 +448,7 @@ implicit_symlinks = false
         );
     }
 
-    /// Dangling symlink: exists() returns false first → "does not exist" error.
+    /// Dangling symlink: `exists()` returns false first → "does not exist" error.
     #[test]
     fn test_validate_dangling_symlink_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -507,7 +503,7 @@ implicit_symlinks = true
         );
     }
 
-    /// 38-symlink chain under MAXSYMLINKS (40). Fails because implicit_symlinks=false.
+    /// 38-symlink chain under `MAXSYMLINKS` (40). Fails because `implicit_symlinks=false`.
     #[test]
     fn test_validate_deep_symlink_chain() {
         let dir = tempfile::tempdir().unwrap();
@@ -557,7 +553,7 @@ implicit_symlinks = false
         );
     }
 
-    /// TOCTOU race-dependent branches (symlink_metadata and canonicalize)
+    /// TOCTOU race-dependent branches (`symlink_metadata` and `canonicalize`)
     /// are not reliably testable without fault injection.
 
     #[test]
@@ -573,7 +569,7 @@ audit_log = "/dev/null"
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
     #[test]
@@ -652,6 +648,6 @@ implicit_symlinks = true
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 }

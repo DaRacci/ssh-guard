@@ -143,10 +143,11 @@ fn build_command_argv<S: ::std::hash::BuildHasher>(
     // 2. Skip command routing token (first token that matched rule.command_name())
     let cmd_name = rule.command_name();
     let mut i: usize = 0;
-    if let Some(cmd) = cmd_name {
-        if i < user_argv.len() && user_argv[i] == cmd {
-            i += 1;
-        }
+    if let Some(cmd) = cmd_name
+        && i < user_argv.len()
+        && user_argv[i] == cmd
+    {
+        i += 1;
     }
 
     // 3. Walk user_argv token-by-token; inject pre_args when token matches
@@ -219,7 +220,14 @@ fn action_run(
                 if start.elapsed() > timeout_dur {
                     // Kill entire process group (children, grandchildren, etc.)
                     // Negative PID targets the process group in kill(2).
-                    let pid = nix::unistd::Pid::from_raw(-(child.id() as i32));
+                    let Ok(child_pid) = i32::try_from(child.id()) else {
+                        let _ = child.wait();
+                        return Err(GuardError::Action(format!(
+                            "child pid '{}' exceeds supported range",
+                            child.id()
+                        )));
+                    };
+                    let pid = nix::unistd::Pid::from_raw(-child_pid);
                     let _ = nix::sys::signal::kill(pid, nix::sys::signal::SIGKILL);
                     let _ = child.wait();
                     return Err(GuardError::Action(format!(
@@ -311,7 +319,7 @@ fn action_list_dir(path_str: &str, config: &Config) -> Result<(), GuardError> {
         .map_err(|e| {
             GuardError::Action(format!("cannot read directory '{}': {e}", path.display()))
         })?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name())
         .collect();
 
@@ -476,9 +484,9 @@ fn execute_list_dir<S: ::std::hash::BuildHasher>(
     }
 }
 
-fn execute_show_help(config: &Config) -> Result<i32, GuardError> {
+fn execute_show_help(config: &Config) -> i32 {
     print!("{}", config.global.help_text);
-    Ok(0)
+    0
 }
 
 /// Build the executable argv for a rule without running the binary.
@@ -499,6 +507,12 @@ pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
     build_command_argv(rule, subcommand_path, user_argv, captures)
 }
 
+/// Execute matched rule action.
+///
+/// # Errors
+///
+/// Returns `GuardError` when action execution fails, required captures are
+/// missing, or the rule contains an unsupported action payload.
 pub fn execute<S: ::std::hash::BuildHasher>(
     config: &Config,
     rule: &Rule,
@@ -521,7 +535,7 @@ pub fn execute<S: ::std::hash::BuildHasher>(
         2 => execute_tail_file(config, &rule.action, captures),
         3 => execute_stat_path(config, &rule.action, captures),
         4 => execute_list_dir(config, &rule.action, captures),
-        5 => execute_show_help(config),
+        5 => Ok(execute_show_help(config)),
         _ => Err(GuardError::Action("unknown action type".into())),
     }
 }
@@ -531,6 +545,7 @@ mod tests {
     use crate::config::arg::ArgStyle;
     use crate::config::global::Global;
     use std::collections::HashMap;
+    use std::fmt::Write as _;
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -1346,7 +1361,10 @@ mod tests {
     fn test_action_tail_file_lines_capped() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("long.log");
-        let content: String = (0..20).map(|i| format!("line{i}\n")).collect();
+        let mut content = String::new();
+        for i in 0..20 {
+            let _ = writeln!(&mut content, "line{i}");
+        }
         std::fs::write(&file_path, &content).unwrap();
 
         let config = Config {
@@ -1418,10 +1436,13 @@ mod tests {
     fn test_action_stat_path_other_fifo() {
         let dir = tempfile::tempdir().unwrap();
         let fifo_path = dir.path().join("test_fifo");
-        let status = std::process::Command::new("mkfifo")
+        let status_result = std::process::Command::new("mkfifo")
             .arg(&fifo_path)
-            .status()
-            .expect("mkfifo should be available");
+            .status();
+        assert!(status_result.is_ok(), "mkfifo should be available");
+        let Ok(status) = status_result else {
+            return;
+        };
         assert!(status.success(), "mkfifo failed");
 
         let config = Config {
@@ -1975,7 +1996,7 @@ mod tests {
             ..Default::default()
         };
         let result = execute_show_help(&config);
-        assert_eq!(result.unwrap(), 0);
+        assert_eq!(result, 0);
     }
 
     // -----------------------------------------------------------------------

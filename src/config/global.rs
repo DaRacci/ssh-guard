@@ -12,7 +12,7 @@ pub struct Global {
     #[serde(default)]
     pub audit_format: AuditFormat,
 
-    /// Help text shown when SSH_ORIGINAL_COMMAND is empty.
+    /// Help text shown when `SSH_ORIGINAL_COMMAND` is empty.
     #[serde(default)]
     pub help_text: String,
 
@@ -20,15 +20,15 @@ pub struct Global {
     #[serde(default = "default_log_tag")]
     pub log_tag: String,
 
-    /// Maximum bytes for read_file action.
+    /// Maximum bytes for `read_file` action.
     #[serde(default = "default_max_read_bytes")]
     pub max_read_bytes: usize,
 
-    /// Maximum lines for tail_file action.
+    /// Maximum lines for `tail_file` action.
     #[serde(default = "default_max_tail_lines")]
     pub max_tail_lines: usize,
 
-    /// Default lines for tail_file when not specified.
+    /// Default lines for `tail_file` when not specified.
     #[serde(default = "default_tail_lines_global")]
     pub default_tail_lines: usize,
 }

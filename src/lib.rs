@@ -5,6 +5,7 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 #![deny(clippy::pedantic)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 #![feature(coverage_attribute)]
 
 pub mod actions;

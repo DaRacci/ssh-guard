@@ -17,6 +17,30 @@ pub enum Contract {
 mod tests {
     use super::*;
 
+    fn as_int_range(contract: &Contract) -> Option<(i64, i64)> {
+        if let Contract::IntRange { min, max } = contract {
+            Some((*min, *max))
+        } else {
+            None
+        }
+    }
+
+    fn as_string_len(contract: &Contract) -> Option<(usize, usize)> {
+        if let Contract::StringLen { min, max } = contract {
+            Some((*min, *max))
+        } else {
+            None
+        }
+    }
+
+    fn as_enum(contract: &Contract) -> Option<Vec<String>> {
+        if let Contract::Enum { values } = contract {
+            Some(values.clone())
+        } else {
+            None
+        }
+    }
+
     #[test]
     fn test_deserialize_int_range() {
         let toml_str = r#"type = "int_range"
@@ -24,13 +48,7 @@ min = 1024
 max = 65535
 "#;
         let c: Contract = toml::from_str(toml_str).unwrap();
-        match c {
-            Contract::IntRange { min, max } => {
-                assert_eq!(min, 1024);
-                assert_eq!(max, 65535);
-            }
-            _ => panic!("expected IntRange"),
-        }
+        assert_eq!(as_int_range(&c), Some((1024, 65_535)));
     }
 
     #[test]
@@ -40,13 +58,7 @@ min = 3
 max = 32
 "#;
         let c: Contract = toml::from_str(toml_str).unwrap();
-        match c {
-            Contract::StringLen { min, max } => {
-                assert_eq!(min, 3);
-                assert_eq!(max, 32);
-            }
-            _ => panic!("expected StringLen"),
-        }
+        assert_eq!(as_string_len(&c), Some((3, 32)));
     }
 
     #[test]
@@ -55,12 +67,7 @@ max = 32
 values = ["ssh", "nginx"]
 "#;
         let c: Contract = toml::from_str(toml_str).unwrap();
-        match c {
-            Contract::Enum { values } => {
-                assert_eq!(values, vec!["ssh", "nginx"]);
-            }
-            _ => panic!("expected Enum"),
-        }
+        assert_eq!(as_enum(&c), Some(vec!["ssh".into(), "nginx".into()]));
     }
 
     #[test]
@@ -109,13 +116,7 @@ min = 1
         let c = Contract::IntRange { min: 0, max: 100 };
         let s = toml::to_string(&c).unwrap();
         let back: Contract = toml::from_str(&s).unwrap();
-        assert_eq!(
-            match back {
-                Contract::IntRange { min, max } => (min, max),
-                _ => panic!("expected IntRange"),
-            },
-            (0, 100)
-        );
+        assert_eq!(as_int_range(&back), Some((0, 100)));
     }
 
     #[test]
@@ -123,13 +124,7 @@ min = 1
         let c = Contract::StringLen { min: 1, max: 64 };
         let s = toml::to_string(&c).unwrap();
         let back: Contract = toml::from_str(&s).unwrap();
-        assert_eq!(
-            match back {
-                Contract::StringLen { min, max } => (min, max),
-                _ => panic!("expected StringLen"),
-            },
-            (1, 64)
-        );
+        assert_eq!(as_string_len(&back), Some((1, 64)));
     }
 
     #[test]
@@ -177,12 +172,6 @@ min = 1
         };
         let s = toml::to_string(&c).unwrap();
         let back: Contract = toml::from_str(&s).unwrap();
-        assert_eq!(
-            match back {
-                Contract::Enum { values } => values,
-                _ => panic!("expected Enum"),
-            },
-            vec!["a", "b"]
-        );
+        assert_eq!(as_enum(&back), Some(vec!["a".into(), "b".into()]));
     }
 }

@@ -26,13 +26,15 @@ impl Serialize for Duration {
 impl<'de> Deserialize<'de> for Duration {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> StdResult<Self, D::Error> {
         struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
+        impl serde::de::Visitor<'_> for Visitor {
             type Value = Duration;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> FmtResult {
                 f.write_str("a duration like \"5s\", \"5000ms\", or integer (ms)")
             }
             fn visit_i64<E: serde::de::Error>(self, v: i64) -> StdResult<Duration, E> {
-                Ok(Duration { millis: v as u64 })
+                Ok(Duration {
+                    millis: v.cast_unsigned(),
+                })
             }
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> StdResult<Duration, E> {
                 Ok(Duration { millis: v })
@@ -45,19 +47,21 @@ impl<'de> Deserialize<'de> for Duration {
     }
 }
 
+/// Parse duration strings like `5s`, `500ms`, `2.5m`, or bare millisecond values.
+///
+/// # Errors
+///
+/// Returns `GuardError::Config` when the input is empty, negative, has an
+/// unknown suffix, is not numeric, or overflows `u64` milliseconds.
 pub fn parse_duration(s: &str) -> Result<Duration> {
-    const IDENTIFIER_MULTIPLIERS: [(&str, f64); 4] = [
-        ("ms", 1.0),
-        ("s", 1000.0),
-        ("m", 60_000.0),
-        ("h", 3_600_000.0),
-    ];
+    const IDENTIFIER_MULTIPLIERS: [(&str, u64); 4] =
+        [("ms", 1), ("s", 1000), ("m", 60_000), ("h", 3_600_000)];
 
     let s = s.trim().to_ascii_lowercase();
     let mut identifier = s
         .chars()
         .rev()
-        .take_while(|c| c.is_ascii_alphabetic())
+        .take_while(char::is_ascii_alphabetic)
         .collect::<String>()
         .chars()
         .rev()
@@ -84,18 +88,67 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         .map(|(_, mult)| *mult)
         .ok_or_else(|| GuardError::Config(format!("invalid duration suffix: {identifier}")))?;
 
-    let number = raw_number
-        .parse::<f64>()
-        .map_err(|_| GuardError::Config(format!("invalid duration number: {s}")))?;
+    let millis = parse_millis(raw_number, multiplier, &s)?;
+    Ok(Duration { millis })
+}
 
-    if number < 0.0 {
+fn parse_millis(raw_number: &str, multiplier: u64, original: &str) -> Result<u64> {
+    if raw_number.is_empty() {
         return Err(GuardError::Config(format!(
-            "duration cannot be negative: {s}"
+            "invalid duration number: {original}"
         )));
     }
 
-    let millis = (number * multiplier) as u64;
-    return Ok(Duration { millis });
+    if raw_number.starts_with('-') {
+        return Err(GuardError::Config(format!(
+            "duration cannot be negative: {original}"
+        )));
+    }
+
+    let mut parts = raw_number.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+
+    if parts.next().is_some() {
+        return Err(GuardError::Config(format!(
+            "invalid duration number: {original}"
+        )));
+    }
+
+    let whole_value = whole
+        .parse::<u64>()
+        .map_err(|_| GuardError::Config(format!("invalid duration number: {original}")))?;
+    let whole_millis = whole_value
+        .checked_mul(multiplier)
+        .ok_or_else(|| GuardError::Config(format!("duration too large: {original}")))?;
+
+    let fraction_millis = match fraction {
+        Some("") | None => 0,
+        Some(value) => {
+            if !value.chars().all(|c| c.is_ascii_digit()) {
+                return Err(GuardError::Config(format!(
+                    "invalid duration number: {original}"
+                )));
+            }
+
+            let digits = u32::try_from(value.len())
+                .map_err(|_| GuardError::Config(format!("duration too precise: {original}")))?;
+            let scale = 10_u64
+                .checked_pow(digits)
+                .ok_or_else(|| GuardError::Config(format!("duration too precise: {original}")))?;
+            let fraction_value = value
+                .parse::<u64>()
+                .map_err(|_| GuardError::Config(format!("invalid duration number: {original}")))?;
+            fraction_value
+                .checked_mul(multiplier)
+                .ok_or_else(|| GuardError::Config(format!("duration too large: {original}")))?
+                / scale
+        }
+    };
+
+    whole_millis
+        .checked_add(fraction_millis)
+        .ok_or_else(|| GuardError::Config(format!("duration too large: {original}")))
 }
 
 #[cfg(test)]
@@ -211,7 +264,7 @@ mod tests {
     #[test]
     fn test_deserialize_negative_i64() {
         let d: Duration = serde_json::from_str("-5000").unwrap();
-        assert_eq!(d.millis, 18446744073709546616);
+        assert_eq!(d.millis, 18_446_744_073_709_546_616);
     }
 
     #[test]

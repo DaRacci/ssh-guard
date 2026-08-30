@@ -5,6 +5,7 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 #![deny(clippy::pedantic)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 #![cfg_attr(test, feature(coverage_attribute))]
 
 use std::process;
@@ -26,7 +27,7 @@ fn main() {
             if let Ok(logger) = syslog::unix(formatter) {
                 let _ = log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)))
                     .map(|()| log::set_max_level(log::LevelFilter::Info));
-                let _ = log::error!("ssh-guard error: {e}");
+                log::error!("ssh-guard error: {e}");
             }
             process::exit(1);
         }
@@ -41,7 +42,7 @@ mod tests {
 
     #[test]
     fn cli_try_parse_validate() {
-        let cli = Cli::try_parse_from(&["ssh-guard", "validate", "--config", "test.toml"]);
+        let cli = Cli::try_parse_from(["ssh-guard", "validate", "--config", "test.toml"]);
         assert!(cli.is_ok());
         let cli = cli.unwrap();
         assert!(matches!(
@@ -52,7 +53,7 @@ mod tests {
 
     #[test]
     fn cli_try_parse_run() {
-        let cli = Cli::try_parse_from(&["ssh-guard", "run", "--config", "test.toml"]);
+        let cli = Cli::try_parse_from(["ssh-guard", "run", "--config", "test.toml"]);
         assert!(cli.is_ok());
         let cli = cli.unwrap();
         assert!(matches!(cli.command, ssh_guard::cli::Command::Run { .. }));
@@ -60,7 +61,7 @@ mod tests {
 
     #[test]
     fn cli_try_parse_add_rule() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "ssh-guard",
             "add-rule",
             "--config",
