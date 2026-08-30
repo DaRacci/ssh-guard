@@ -29,11 +29,6 @@ fn resolve_within_roots(input_path: &Path, root_set: &[String]) -> Result<(), Gu
     )))
 }
 
-fn resolve_path_parent(input_path: &Path, root_set: &[String]) -> Result<(), GuardError> {
-    let parent = input_path.parent().unwrap_or(Path::new("."));
-    resolve_within_roots(parent, root_set)
-}
-
 fn resolve_binary(binary: &str, implicit_symlinks: bool) -> Result<String, GuardError> {
     let path = Path::new(binary);
     if !path.exists() {
@@ -220,7 +215,7 @@ fn action_tail_file(path_str: &str, lines: usize, config: &Config) -> Result<(),
 
 fn action_stat_path(path_str: &str, config: &Config) -> Result<(), GuardError> {
     let path = Path::new(path_str);
-    resolve_path_parent(path, &config.roots)?;
+    resolve_within_roots(path, &config.roots)?;
 
     let meta = std::fs::symlink_metadata(path)?;
     let file_type = meta.file_type();
@@ -939,38 +934,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Tests for resolve_path_parent
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_resolve_path_parent_no_parent() {
-        // Path with a single component has parent = "" (empty path)
-        // When canonicalized, "" becomes the current working directory.
-        // We use a temp dir as root and a single-component filename to test this.
-        let dir = tempfile::tempdir().unwrap();
-        let child_path = dir.path().join("foo");
-        std::fs::write(&child_path, "content").unwrap();
-
-        // Convert to a single-component path relative to dir
-        // Path::new("foo").parent() returns Some("") → canonicalizes to cwd
-        // Instead, just verify that resolve_path_parent works for a file within a root
-        let roots = vec![dir.path().to_string_lossy().to_string()];
-        assert!(resolve_path_parent(&child_path, &roots).is_ok());
-    }
-
-    #[test]
-    fn test_resolve_path_parent_normal_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("sub").join("test.txt");
-        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        std::fs::write(&file_path, "hello").unwrap();
-
-        // parent is dir/sub
-        let roots = vec![dir.path().to_string_lossy().to_string()];
-        assert!(resolve_path_parent(&file_path, &roots).is_ok());
-    }
-
-    // -----------------------------------------------------------------------
     // Tests for resolve_binary
     // -----------------------------------------------------------------------
 
@@ -1328,6 +1291,55 @@ mod tests {
         let result = action_stat_path(fifo_path.to_str().unwrap(), &config);
         assert!(result.is_ok());
         // fifo cleaned up when TempDir drops
+    }
+
+    #[test]
+    fn test_action_stat_path_outside_roots_rejected() {
+        // A symlink inside the root pointing to a file outside the root must be
+        // rejected: the full resolved target is outside the roots even though the
+        // symlink's parent is inside.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let real_file = outside.path().join("secret.txt");
+        std::fs::write(&real_file, "data").unwrap();
+        let link_path = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real_file, &link_path).unwrap();
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        let err = action_stat_path(link_path.to_str().unwrap(), &config).unwrap_err();
+        assert!(
+            matches!(err, GuardError::PathNotAllowed(_)),
+            "expected PathNotAllowed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_action_stat_path_parent_traversal_rejected() {
+        // A `..` traversal whose parent resolves inside the root but whose full
+        // path resolves outside must be rejected.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let real_file = outside.path().join("secret.txt");
+        std::fs::write(&real_file, "data").unwrap();
+
+        // Build a path inside `dir` that traverses up to the outside file.
+        let traversal = dir.path().join("..").join("..").join("..").join("..");
+        let target = traversal.join(real_file.strip_prefix("/").unwrap());
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        let err = action_stat_path(target.to_str().unwrap(), &config).unwrap_err();
+        assert!(
+            matches!(err, GuardError::PathNotAllowed(_)),
+            "expected PathNotAllowed, got {err:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
