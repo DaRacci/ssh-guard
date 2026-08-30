@@ -1,7 +1,7 @@
-mod flags;
+pub mod flags;
 mod matching;
-mod parse;
-mod types;
+pub mod parse;
+pub(crate) mod types;
 mod validate;
 
 pub use matching::match_command;
