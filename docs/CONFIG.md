@@ -209,3 +209,24 @@ It writes the updated config back to the same file.
 
 Its worth noting that this subcommand does a best effort merge, and may not always produce the most optimal config.
 It is recommended to review the config after using this command.
+
+---
+
+## Generated help
+
+Instead of hand-writing `help_text`, you can render a usage listing derived from the rules:
+
+```sh
+ssh-guard help --config /etc/ssh-guard/config.toml
+```
+
+Options:
+
+| Flag | Description |
+|------|-------------|
+| `--profile <name>` | Render the base config merged with that profile's rules. |
+| `--tree` | Render subcommands as an indented tree instead of inline. |
+| `--verbose` | Enrich template labels with contract details (e.g. `<port:1024-65535>`). |
+| `--colour <auto\|always\|never>` | Colourise output. Default `auto` (on for a TTY, off when piped; honours `NO_COLOR`). |
+
+`show_help` rules are skipped. `read_file` / `tail_file` / `stat_path` / `list_dir` rules are shown, since they are allowed inputs.

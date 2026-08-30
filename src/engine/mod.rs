@@ -1,4 +1,4 @@
-mod flags;
+pub mod flags;
 mod matching;
 pub(crate) mod parse;
 pub(crate) mod types;
