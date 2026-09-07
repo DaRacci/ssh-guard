@@ -682,3 +682,151 @@ pre_args = ["--namespace={repo:-origin}"]
         vec!["remote".to_string(), "--namespace=origin".to_string()]
     );
 }
+
+#[test]
+fn test_rule_level_pre_args_reach_executed_argv() {
+    // Rule-level pre_args (Rule.pre_args, distinct from subcommand
+    // pre_args) must be injected into the executed argv — previously they
+    // were parsed and validated but silently dropped at execution time.
+    let toml_str = r#"
+[[rules]]
+action = { type = "run", binary = "/bin/du", args = [], timeout = "30s" }
+command = "du"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = ["--one-file-system", "--human-readable"]
+args = ["{path}"]
+
+[contracts.path]
+type = "string_len"
+min = 1
+max = 256
+"#;
+    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        cfg.rules[0].pre_args,
+        vec!["--one-file-system", "--human-readable"]
+    );
+
+    // Plain literal rule-level pre_args land before user argv.
+    let argv: Vec<String> = ["du", "/var"].iter().map(|s| s.to_string()).collect();
+    let matched = ssh_guard::engine::match_command(&cfg, &argv).unwrap();
+    let rule = &cfg.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    )
+    .unwrap();
+    assert_eq!(
+        built,
+        vec![
+            "--one-file-system".to_string(),
+            "--human-readable".to_string(),
+            "/var".to_string(),
+        ],
+        "rule-level pre_args must appear in the executed argv before user args"
+    );
+}
+
+#[test]
+fn test_rule_level_pre_args_ordered_before_subcommand_pre_args() {
+    // Ordering: action.args -> rule pre_args -> subcommand name ->
+    // subcommand pre_args -> user argv. Rule-level pre_args are top-level
+    // flags, so they must come before any injected subcommand name.
+    let toml_str = r#"
+[[rules]]
+action = { type = "run", binary = "/bin/git", args = ["--exec-path=/opt/git"], timeout = "10s" }
+command = "git"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = ["--no-pager"]
+
+[[rules.subcommands]]
+name = "log"
+pre_args = ["--graph"]
+"#;
+    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+
+    let argv: Vec<String> = ["git", "log"].iter().map(|s| s.to_string()).collect();
+    let matched = ssh_guard::engine::match_command(&cfg, &argv).unwrap();
+    let rule = &cfg.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    )
+    .unwrap();
+    assert_eq!(
+        built,
+        vec![
+            "--exec-path=/opt/git".to_string(), // action.args
+            "--no-pager".to_string(),           // rule-level pre_args
+            "log".to_string(),                  // subcommand name
+            "--graph".to_string(),              // subcommand pre_args
+        ],
+        "rule-level pre_args must precede the subcommand name and user argv"
+    );
+}
+
+#[test]
+fn test_rule_level_pre_args_template_substitution() {
+    // Rule-level pre_args support the same {name} / {name:-default}
+    // placeholder substitution as action.args and subcommand pre_args,
+    // failing closed on a missing capture with no default.
+    let toml_str = r#"
+[[rules]]
+action = { type = "run", binary = "/bin/git", args = [], timeout = "10s" }
+command = "git"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = ["-c", "safe.directory={repo:-*}"]
+args = ["{path}"]
+
+[contracts.path]
+type = "string_len"
+min = 1
+max = 256
+"#;
+    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+
+    // No capture named 'repo' -> the default applies.
+    let argv: Vec<String> = ["git", "/srv/repo"].iter().map(|s| s.to_string()).collect();
+    let matched = ssh_guard::engine::match_command(&cfg, &argv).unwrap();
+    let rule = &cfg.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    )
+    .unwrap();
+    assert_eq!(
+        built,
+        vec![
+            "-c".to_string(),
+            "safe.directory=*".to_string(),
+            "/srv/repo".to_string(),
+        ]
+    );
+
+    // A placeholder with no matching capture and no default is denied
+    // (fail-closed), never passed through as a literal token.
+    let toml_str_nodefault = toml_str.replace("{repo:-*}", "{repo}");
+    let cfg2: config::Config = toml::from_str(&toml_str_nodefault).unwrap();
+    let matched = ssh_guard::engine::match_command(&cfg2, &argv).unwrap();
+    let rule = &cfg2.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    );
+    let err = built.unwrap_err().to_string();
+    assert!(
+        err.contains("missing capture 'repo'"),
+        "expected missing-capture denial, got: {err}"
+    );
+}
