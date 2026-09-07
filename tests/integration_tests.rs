@@ -538,6 +538,117 @@ max = 256
 }
 
 #[test]
+fn test_issue_regression_du_du_depth() {
+    // Regression for the original issue: a rule pinning `du` with
+    // action.args = ["-d{du_depth}"] must resolve the placeholder from
+    // match captures (or default) at execution time — never pass the raw
+    // token `-d{du_depth}` to du (which rejects it as an invalid depth).
+    let toml_str = r#"
+[[rules]]
+action = { type = "run", binary = "/usr/bin/du", args = ["-d{du_depth:-2}"], timeout = "30s" }
+command = "du"
+implicit_symlinks = true
+arg_style = "gnu_long"
+args = ["{path}"]
+
+[contracts.path]
+type = "string_len"
+min = 1
+max = 256
+"#;
+    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+
+    // Substituted pinned value reaches the executed binary's argv:
+    // du -d2 /var, not du -d{du_depth:-2} /var.
+    let argv: Vec<String> = ["du", "/var"].iter().map(|s| s.to_string()).collect();
+    let matched = ssh_guard::engine::match_command(&cfg, &argv).unwrap();
+    let rule = &cfg.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    )
+    .unwrap();
+    assert_eq!(
+        built,
+        vec!["-d2".to_string(), "/var".to_string()],
+        "raw placeholder -d{{du_depth:-2}} must never reach the binary"
+    );
+
+    // Missing depth capture with no default: fail closed via denial,
+    // never execute with the raw placeholder.
+    let toml_str_nodefault = toml_str.replace("{du_depth:-2}", "{du_depth}");
+    let cfg2: config::Config = toml::from_str(&toml_str_nodefault).unwrap();
+    let matched = ssh_guard::engine::match_command(&cfg2, &argv).unwrap();
+    let rule = &cfg2.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    );
+    let err = built.unwrap_err().to_string();
+    assert!(
+        err.contains("missing capture 'du_depth'"),
+        "expected missing-capture denial, got: {err}"
+    );
+
+    // Contract-validated user capture with the issue's capture name: the
+    // rule captures du_depth from the inline flag -d<N> (validated by
+    // int_range) and the user token passes through to the binary.
+    let toml_str_capture = r#"
+[[rules]]
+action = { type = "run", binary = "/usr/bin/du", args = [], timeout = "30s" }
+command = "du"
+implicit_symlinks = true
+arg_style = "gnu_long"
+args = ["-d{du_depth}", "{path}"]
+
+[contracts.du_depth]
+type = "int_range"
+min = 0
+max = 5
+
+[contracts.path]
+type = "string_len"
+min = 1
+max = 256
+"#;
+    let cfg3: config::Config = toml::from_str(toml_str_capture).unwrap();
+    let argv: Vec<String> = ["du", "-d3", "/var"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let matched = ssh_guard::engine::match_command(&cfg3, &argv).unwrap();
+    assert_eq!(
+        matched.captures.get("du_depth"),
+        Some(&"3".to_string()),
+        "capture name 'du_depth' must be captured and contract-validated"
+    );
+    let rule = &cfg3.rules[matched.rule_index];
+    let built = ssh_guard::actions::execute_argv_for_test(
+        rule,
+        &matched.subcommand_path,
+        &matched.captures,
+        &argv,
+    )
+    .unwrap();
+    assert_eq!(
+        built,
+        vec!["-d3".to_string(), "/var".to_string()],
+        "contract-validated capture passes through to the binary"
+    );
+
+    // Out-of-range depth violates the pinned contract: no match, denied.
+    let argv: Vec<String> = ["du", "-d9", "/var"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert!(ssh_guard::engine::match_command(&cfg3, &argv).is_err());
+}
+
+#[test]
 fn test_subcommand_pre_args_template_substitution() {
     let toml_str = r#"
 [[rules]]
