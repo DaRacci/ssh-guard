@@ -98,8 +98,9 @@ fn substitute_arg_template<S: ::std::hash::BuildHasher>(
 /// Build the final argv for a `Run` action.
 ///
 /// Subcommand names are auto-injected from `sub.name`, followed by `pre_args`.
-/// `{name}` placeholders in `action.args` and `pre_args` are resolved from the
-/// match captures, with `{name:-default}` fallbacks.
+/// `{name}` placeholders in `action.args` and all `pre_args` (rule-level and
+/// subcommand-level) are resolved from the match captures, with
+/// `{name:-default}` fallbacks.
 /// Only config-sourced strings and user-supplied flags/positionals appear in
 /// the final argv; user tokens are never template-substituted.
 fn build_command_argv<S: ::std::hash::BuildHasher>(
@@ -114,6 +115,13 @@ fn build_command_argv<S: ::std::hash::BuildHasher>(
         for arg in args {
             argv.push(substitute_arg_template(arg, captures)?);
         }
+    }
+
+    // Rule-level pre_args: injected at the top level, before any subcommand
+    // name and before user argv. Template-substituted like subcommand
+    // pre_args, fail-closed on missing captures.
+    for arg in &rule.pre_args {
+        argv.push(substitute_arg_template(arg, captures)?);
     }
 
     // 2. Skip command routing token (first token that matched rule.command_name())

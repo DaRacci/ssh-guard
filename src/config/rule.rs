@@ -31,7 +31,9 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 
-    /// Static args prepended before user argv. No template substitution.
+    /// Static args prepended before user argv, at the top level (before any
+    /// subcommand name). `{name}` / `{name:-default}` placeholders are
+    /// substituted from match captures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_args: Vec<String>,
 
