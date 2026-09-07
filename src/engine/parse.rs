@@ -59,6 +59,16 @@ pub(crate) fn parse_template_type(inner: &str) -> TemplateType {
 }
 
 pub(crate) fn parse_single_template(s: &str) -> TemplateType {
+    // Explicitly named capture: `{name:template}` stores the matched value
+    // under `name` (e.g. `{path:string}` -> capture "path").
+    if let Some((name, rest)) = s.split_once(':')
+        && is_valid_capture_name(name)
+    {
+        return TemplateType::Named {
+            name: name.to_string(),
+            inner: Box::new(parse_single_template(rest)),
+        };
+    }
     match s {
         "string" => TemplateType::String,
         "int" => TemplateType::Int,
@@ -67,9 +77,75 @@ pub(crate) fn parse_single_template(s: &str) -> TemplateType {
     }
 }
 
+/// A capture name must be a usable map key: starts with a letter or
+/// underscore, then letters/digits/underscores/hyphens.
+fn is_valid_capture_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_named_capture() {
+        let p = parse_arg_pattern("{path:string}");
+        match p {
+            ArgPattern::Template(TemplateType::Named { name, inner }) => {
+                assert_eq!(name, "path");
+                assert_eq!(*inner, TemplateType::String);
+            }
+            _ => panic!("expected Named, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_named_capture_contract() {
+        let p = parse_arg_pattern("{path:port}");
+        match p {
+            ArgPattern::Template(TemplateType::Named { name, inner }) => {
+                assert_eq!(name, "path");
+                assert_eq!(*inner, TemplateType::ContractRef("port".into()));
+            }
+            _ => panic!("expected Named, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_capture_name_falls_back() {
+        // A colon after an invalid name is not a named capture - the whole
+        // inner string is treated as a contract ref, as before.
+        let p = parse_arg_pattern("{1bad:string}");
+        match p {
+            ArgPattern::Template(TemplateType::ContractRef(name)) => {
+                assert_eq!(name, "1bad:string");
+            }
+            _ => panic!("expected ContractRef, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn test_capture_key_named_and_union() {
+        let named = parse_template_type("path:string");
+        assert_eq!(named.capture_key(), Some("path"));
+
+        let contract = parse_template_type("port");
+        assert_eq!(contract.capture_key(), Some("port"));
+
+        let builtin = parse_template_type("string");
+        assert_eq!(builtin.capture_key(), None);
+
+        let union_same = parse_template_type("path:string|path:any");
+        assert_eq!(union_same.capture_key(), Some("path"));
+
+        let union_mixed = parse_template_type("path:string|other:string");
+        assert_eq!(union_mixed.capture_key(), None);
+    }
 
     #[test]
     fn test_parse_template_builtins() {

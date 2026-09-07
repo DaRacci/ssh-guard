@@ -271,6 +271,27 @@ fn execute_run(
     }
 }
 
+/// Resolve a capture reference from the match captures.
+///
+/// File-action fields (`path_capture`, `lines_capture`) may be written with
+/// or without template braces: both `"path"` and `"{path}"` resolve to the
+/// capture stored under key `path` (e.g. produced by `{path:string}` or
+/// `{path}` contract args). If the exact key is missing, the braced form is
+/// also tried so `{path}`-style references match contract-named captures.
+fn lookup_capture<'a>(
+    captures: &'a HashMap<String, String>,
+    reference: &str,
+) -> Option<&'a String> {
+    if let Some(v) = captures.get(reference) {
+        return Some(v);
+    }
+    let trimmed = reference.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.len() > 2 {
+        return captures.get(&trimmed[1..trimmed.len() - 1]);
+    }
+    None
+}
+
 fn execute_read_file(
     config: &Config,
     action: &Action,
@@ -281,9 +302,11 @@ fn execute_read_file(
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -306,12 +329,14 @@ fn execute_tail_file(
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         let lines = lines_capture
             .as_ref()
-            .and_then(|lc| captures.get(lc.as_str()))
+            .and_then(|lc| lookup_capture(captures, lc))
             .and_then(|l| l.parse::<usize>().ok())
             .unwrap_or(*default_lines);
         if root_set != "roots" {
@@ -334,9 +359,11 @@ fn execute_stat_path(
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -357,9 +384,11 @@ fn execute_list_dir(
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -1758,6 +1787,73 @@ mod tests {
         assert!(
             matches!(&result, Err(GuardError::Action(msg)) if msg == "expected ListDir action"),
             "expected 'expected ListDir action' error, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for lookup_capture brace tolerance
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_lookup_capture_accepts_braced_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("data.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+        // Braced reference "{path}" resolves against capture key "path"
+        // (produced by a {path:string} arg or a contract named "path").
+        let action = Action::ReadFile {
+            path_capture: "{path}".into(),
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_lookup_capture_named_capture_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("app.log");
+        std::fs::write(&file_path, "l1\nl2\nl3\n").unwrap();
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: Some("n".into()),
+            default_lines: 10,
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        captures.insert("n".into(), "2".into());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_missing_capture_error_names_field_and_fix() {
+        let config = Config::default();
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+        let result = execute_read_file(&config, &action, &captures);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("missing capture 'path'") && err.contains("{path:string}"),
+            "expected actionable error, got: {err}"
         );
     }
 

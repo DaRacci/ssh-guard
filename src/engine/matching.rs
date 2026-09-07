@@ -408,7 +408,8 @@ pub(crate) fn match_remaining_args(
 
 pub(crate) fn capture_name(template: &TemplateType, counter: &mut usize) -> String {
     match template {
-        TemplateType::ContractRef(name) => name.clone(),
+        // Explicitly named capture: `{name:template}` -> capture "name".
+        TemplateType::Named { name, .. } | TemplateType::ContractRef(name) => name.clone(),
         _ => {
             let n = *counter;
             *counter += 1;
@@ -544,6 +545,60 @@ mod tests {
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.rule_index, 1);
         assert_eq!(result.subcommand_path, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_match_named_capture() {
+        // Rule with a named capture in args: {path:string} -> capture "path".
+        let mut cfg = make_config();
+        cfg.rules[1] = Rule {
+            action: Action::Run {
+                binary: "/bin/cat".into(),
+                args: vec![],
+                timeout: Duration { millis: 5000 },
+            },
+            command: Some("cat".into()),
+            args: vec!["{path:string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        };
+
+        let argv = vec!["cat".into(), "/etc/hostname".into()];
+        let result = match_command(&cfg, &argv).unwrap();
+        assert_eq!(result.captures.get("path").unwrap(), "/etc/hostname");
+        // No positional fallback capture for named templates.
+        assert!(result.captures.get("arg_0").is_none());
+    }
+
+    #[test]
+    fn test_match_named_capture_validates_inner_template() {
+        let mut cfg = make_config();
+        cfg.rules[1] = Rule {
+            action: Action::Run {
+                binary: "/bin/tail".into(),
+                args: vec![],
+                timeout: Duration { millis: 5000 },
+            },
+            command: Some("tail".into()),
+            args: vec!["-n".into(), "{n:int}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec![],
+            subcommands: vec![],
+        };
+
+        let ok = match_command(&cfg, &["tail".into(), "-n".into(), "20".into()]);
+        assert!(ok.is_ok());
+        assert_eq!(ok.unwrap().captures.get("n").unwrap(), "20");
+
+        let bad = match_command(&cfg, &["tail".into(), "-n".into(), "abc".into()]);
+        assert!(bad.is_err(), "expected 'abc' to fail int validation");
     }
 
     #[test]

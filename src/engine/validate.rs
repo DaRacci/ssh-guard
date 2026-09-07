@@ -9,6 +9,7 @@ pub(crate) fn validate_template_value(
     contracts: &HashMap<String, Contract>,
 ) -> Result<(), String> {
     match template {
+        TemplateType::Named { inner, .. } => validate_template_value(value, inner, contracts),
         TemplateType::String => {
             if value.is_empty() {
                 return Err("empty string not allowed".into());
