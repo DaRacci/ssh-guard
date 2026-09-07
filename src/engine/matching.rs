@@ -4,6 +4,7 @@ use super::flags::{effective_style, expand_flags, is_flag_like};
 use super::parse::parse_arg_pattern;
 use super::types::{ArgPattern, MatchResult, TemplateType};
 use super::validate::validate_template_value;
+use crate::config::arg::ArgStyle;
 use crate::config::{Config, rule::Rule, subcommand::Subcommand};
 use crate::errors::{GuardError, MatchFailure};
 
@@ -41,6 +42,86 @@ pub(crate) fn record_failure(
         token: token.to_string(),
         reason: reason.to_string(),
     });
+}
+
+/// Successful match state threaded through the recursive matcher.
+#[derive(Clone)]
+struct MatchState {
+    captures: HashMap<String, String>,
+    arg_counter: usize,
+    /// Subcommand path of the deepest level reached so far.
+    path: Vec<String>,
+    /// A template value failed validation; the match must ultimately fail
+    /// even if every token is consumed (previous matcher behavior).
+    had_validation_error: bool,
+    /// True once an arg pattern or subcommand consumed a token. Top-level
+    /// rules that declare args or subcommands require at least one such
+    /// match; allowlisted flags alone never satisfy them.
+    consumed_arg_or_sub: bool,
+}
+
+/// One matcher level: the flags, arg patterns, and subcommands declared by
+/// the rule itself or by the subcommand we have descended into.
+struct LevelCtx<'a> {
+    flags: Vec<String>,
+    patterns: Vec<ArgPattern>,
+    subcommands: &'a [Subcommand],
+    style: &'a ArgStyle,
+    path: Vec<String>,
+    is_top_level: bool,
+}
+
+impl<'a> LevelCtx<'a> {
+    fn for_rule(rule: &'a Rule, config: &Config) -> LevelCtx<'a> {
+        LevelCtx {
+            flags: expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags),
+            patterns: rule.args.iter().map(|a| parse_arg_pattern(a)).collect(),
+            subcommands: &rule.subcommands,
+            style: &rule.arg_style,
+            path: Vec::new(),
+            is_top_level: true,
+        }
+    }
+
+    fn for_sub(
+        parent: &LevelCtx<'a>,
+        rule: &'a Rule,
+        sub: &'a Subcommand,
+        config: &Config,
+    ) -> LevelCtx<'a> {
+        let mut path = parent.path.clone();
+        path.push(sub.name.clone());
+        LevelCtx {
+            flags: expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags),
+            patterns: sub.args.iter().map(|a| parse_arg_pattern(a)).collect(),
+            subcommands: &sub.subcommands,
+            style: effective_style(rule, Some(sub)),
+            path,
+            is_top_level: false,
+        }
+    }
+}
+
+fn sep_for(style: &ArgStyle) -> char {
+    if matches!(style, ArgStyle::Dos) {
+        ':'
+    } else {
+        '='
+    }
+}
+
+fn fail_reason(ctx: &LevelCtx) -> &'static str {
+    if !ctx.subcommands.is_empty() {
+        if ctx.is_top_level {
+            "unknown subcommand"
+        } else {
+            "not in allowed args"
+        }
+    } else if ctx.patterns.is_empty() && ctx.is_top_level {
+        "unexpected arguments after command"
+    } else {
+        "not in allowed args"
+    }
 }
 
 pub(crate) fn try_match_rule(
@@ -84,11 +165,7 @@ pub(crate) fn try_match_rule(
         start = 1;
     }
 
-    let top_flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
-    let style = &rule.arg_style;
-    let i = consume_flags(argv, start, &top_flags, style, rule_idx, &[], failures);
-
-    if i >= argv.len() {
+    if start >= argv.len() {
         // All tokens consumed - fine if rule has nothing left to match
         if rule.subcommands.is_empty() && rule.args.is_empty() {
             return Ok(MatchResult {
@@ -97,7 +174,7 @@ pub(crate) fn try_match_rule(
                 subcommand_path: vec![],
             });
         }
-        let last = argv.last().map(|s| s.as_str()).unwrap_or("");
+        let last = argv.last().map_or("", String::as_str);
         record_failure(
             failures,
             rule_idx,
@@ -109,311 +186,280 @@ pub(crate) fn try_match_rule(
         return Err(());
     }
 
-    if !rule.subcommands.is_empty() {
-        walk_subcommands(rule_idx, rule, config, argv, i, &[], failures)
-    } else if !rule.args.is_empty() {
-        match_remaining_args_inner(rule_idx, config, argv, i, &[], &rule.args, style, failures)
-    } else {
+    let ctx = LevelCtx::for_rule(rule, config);
+    let state = MatchState {
+        captures: HashMap::new(),
+        arg_counter: 0,
+        path: Vec::new(),
+        had_validation_error: false,
+        consumed_arg_or_sub: false,
+    };
+
+    match match_level(&ctx, rule, config, rule_idx, argv, start, state, failures) {
+        Ok(state) if !state.had_validation_error => Ok(MatchResult {
+            rule_index: rule_idx,
+            captures: state.captures,
+            subcommand_path: state.path,
+        }),
+        _ => Err(()),
+    }
+}
+
+/// Unified recursive matcher: consumes argv left to right, accepting
+/// allowlisted flags (with optional value), positional arg patterns, and
+/// subcommand descent in any order, so option order is free exactly like the
+/// underlying tools accept it. Branches backtrack on dead ends.
+fn match_level(
+    ctx: &LevelCtx,
+    rule: &Rule,
+    config: &Config,
+    rule_idx: usize,
+    argv: &[String],
+    pos: usize,
+    state: MatchState,
+    failures: &mut Vec<MatchFailure>,
+) -> Result<MatchState, ()> {
+    if pos >= argv.len() {
+        // Terminal: a top-level rule declaring args or subcommands needs at
+        // least one token matched by an arg pattern or subcommand descent -
+        // flag consumption alone does not satisfy it. Failing here lets the
+        // caller backtrack into other branches (e.g. standalone flag form).
+        if ctx.is_top_level
+            && (!ctx.subcommands.is_empty() || !ctx.patterns.is_empty())
+            && !state.consumed_arg_or_sub
+        {
+            let last = argv.last().map_or("", String::as_str);
+            record_failure(
+                failures,
+                rule_idx,
+                &ctx.path,
+                argv.len().saturating_sub(1),
+                last,
+                "no arguments after command",
+            );
+            return Err(());
+        }
+        return Ok(state);
+    }
+    let token = &argv[pos];
+
+    // 1. Exact allowlisted flag, any token shape (a Dos-style rule may
+    //    allowlist `--gnu-flag`, which is not "flag-like" under Dos).
+    if ctx.flags.iter().any(|f| f == token) {
+        // Greedy "flag value" consumption first (previous matcher behavior),
+        // then standalone.
+        if pos + 1 < argv.len() && !is_flag_like(&argv[pos + 1], ctx.style) {
+            if let Ok(next) = match_level(
+                ctx,
+                rule,
+                config,
+                rule_idx,
+                argv,
+                pos + 2,
+                state.clone(),
+                failures,
+            ) {
+                return Ok(next);
+            }
+        }
+        if let Ok(next) = match_level(
+            ctx,
+            rule,
+            config,
+            rule_idx,
+            argv,
+            pos + 1,
+            state.clone(),
+            failures,
+        ) {
+            return Ok(next);
+        }
+        // Fall through: the token may also be matched by an arg pattern.
+    }
+
+    if is_flag_like(token, ctx.style) {
+        // 2. Inline value form: --flag=value (or /flag:value under Dos).
+        let sep = sep_for(ctx.style);
+        if let Some(sep_pos) = token.find(sep) {
+            if ctx.flags.iter().any(|f| *f == token[..sep_pos]) {
+                if let Ok(next) = match_level(
+                    ctx,
+                    rule,
+                    config,
+                    rule_idx,
+                    argv,
+                    pos + 1,
+                    state.clone(),
+                    failures,
+                ) {
+                    return Ok(next);
+                }
+            }
+        }
+
+        // 3. Arg patterns (any level).
+        if let Some(next) =
+            try_arg_patterns(ctx, rule, config, rule_idx, argv, pos, &state, failures)
+        {
+            return Ok(next);
+        }
+
+        record_failure(failures, rule_idx, &ctx.path, pos, token, fail_reason(ctx));
+        return Err(());
+    }
+
+    // 4. Non-flag token: subcommand descent first.
+    if let Some(sub) = ctx.subcommands.iter().find(|s| s.name == *token) {
+        let sub_ctx = LevelCtx::for_sub(ctx, rule, sub, config);
+        let mut next = state;
+        next.consumed_arg_or_sub = true;
+        next.path.clone_from(&sub_ctx.path);
+        return match_level(
+            &sub_ctx,
+            rule,
+            config,
+            rule_idx,
+            argv,
+            pos + 1,
+            next,
+            failures,
+        );
+    }
+
+    // 5. Positional arg pattern (rules may declare args alongside
+    //    subcommands, so a non-subcommand token can still be an arg).
+    if let Some(next) = try_arg_patterns(ctx, rule, config, rule_idx, argv, pos, &state, failures) {
+        return Ok(next);
+    }
+
+    if !ctx.subcommands.is_empty() && ctx.is_top_level {
         record_failure(
             failures,
             rule_idx,
-            &[],
-            i,
-            &argv[i],
-            "unexpected arguments after command",
+            &ctx.path,
+            pos,
+            token,
+            "unknown subcommand",
         );
-        Err(())
-    }
-}
-
-pub(crate) fn consume_flags(
-    argv: &[String],
-    start: usize,
-    allowed: &[String],
-    style: &crate::config::arg::ArgStyle,
-    _rule_idx: usize,
-    _path: &[String],
-    _failures: &mut Vec<MatchFailure>,
-) -> usize {
-    let mut i = start;
-    while i < argv.len() {
-        let token = &argv[i];
-
-        if allowed.contains(token) {
-            i += 1;
-            if i < argv.len() && !is_flag_like(&argv[i], style) {
-                i += 1;
-            }
-            continue;
-        }
-
-        let sep = if matches!(style, crate::config::arg::ArgStyle::Dos) {
-            ':'
-        } else {
-            '='
-        };
-        if let Some(sep_pos) = token.find(sep) {
-            let flag_part = &token[..sep_pos];
-            if allowed.contains(&flag_part.to_string()) {
-                i += 1;
-                continue;
-            }
-        }
-
-        // Not in allowed list or matching inline template - stop.
-        // This token may be an inline arg template or positional arg.
-        // Let match_remaining_args handle it.
-        break;
-    }
-    i
-}
-
-pub(crate) fn walk_subcommands(
-    rule_idx: usize,
-    rule: &Rule,
-    config: &Config,
-    argv: &[String],
-    start: usize,
-    path: &[String],
-    failures: &mut Vec<MatchFailure>,
-) -> Result<MatchResult, ()> {
-    let token = &argv[start];
-
-    for sub in &rule.subcommands {
-        if sub.name != *token {
-            continue;
-        }
-
-        let mut new_path = path.to_vec();
-        new_path.push(sub.name.clone());
-        let mut i = start + 1;
-
-        let sub_style = effective_style(rule, Some(sub));
-        let sub_flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
-        i = consume_flags(
-            argv, i, &sub_flags, sub_style, rule_idx, &new_path, failures,
-        );
-
-        if !sub.subcommands.is_empty() && i < argv.len() {
-            // Peek at next token - if it matches a nested subcommand, descend
-            if sub.subcommands.iter().any(|n| n.name == argv[i]) {
-                return walk_subcommands_nested(
-                    rule_idx, rule, config, argv, i, &new_path, sub, failures,
-                );
-            }
-        }
-
-        return match_remaining_args(rule_idx, config, argv, i, &new_path, sub, failures);
+        return Err(());
     }
 
-    record_failure(failures, rule_idx, path, start, token, "unknown subcommand");
+    record_failure(failures, rule_idx, &ctx.path, pos, token, fail_reason(ctx));
     Err(())
 }
 
-pub(crate) fn walk_subcommands_nested(
-    rule_idx: usize,
+/// Try each arg pattern at `pos`; on a fit, validate/capture and recurse.
+/// Returns the deepest successful state, or None when no pattern leads to a
+/// full match.
+fn try_arg_patterns(
+    ctx: &LevelCtx,
     rule: &Rule,
     config: &Config,
-    argv: &[String],
-    start: usize,
-    path: &[String],
-    parent: &Subcommand,
-    failures: &mut Vec<MatchFailure>,
-) -> Result<MatchResult, ()> {
-    let token = &argv[start];
-
-    for sub in &parent.subcommands {
-        if sub.name != *token {
-            continue;
-        }
-
-        let mut new_path = path.to_vec();
-        new_path.push(sub.name.clone());
-        let mut i = start + 1;
-
-        let sub_style = effective_style(rule, Some(sub));
-        let sub_flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
-        i = consume_flags(
-            argv, i, &sub_flags, sub_style, rule_idx, &new_path, failures,
-        );
-
-        if !sub.subcommands.is_empty() && i < argv.len() {
-            if sub.subcommands.iter().any(|n| n.name == argv[i]) {
-                return walk_subcommands_nested(
-                    rule_idx, rule, config, argv, i, &new_path, sub, failures,
-                );
-            }
-        }
-
-        return match_remaining_args(rule_idx, config, argv, i, &new_path, sub, failures);
-    }
-
-    record_failure(
-        failures,
-        rule_idx,
-        path,
-        start,
-        token,
-        "unknown nested subcommand",
-    );
-    Err(())
-}
-
-pub(crate) fn match_remaining_args_inner(
     rule_idx: usize,
-    config: &Config,
     argv: &[String],
-    start: usize,
-    path: &[String],
-    args: &[String],
-    style: &crate::config::arg::ArgStyle,
+    pos: usize,
+    state: &MatchState,
     failures: &mut Vec<MatchFailure>,
-) -> Result<MatchResult, ()> {
-    let mut captures: HashMap<String, String> = HashMap::new();
-    let mut arg_counter: usize = 0;
+) -> Option<MatchState> {
+    let token = &argv[pos];
 
-    let patterns: Vec<ArgPattern> = args.iter().map(|a| parse_arg_pattern(a)).collect();
-
-    let mut i = start;
-    let mut has_error = false;
-
-    while i < argv.len() {
-        let token = &argv[i];
-        let mut matched = false;
-
-        for pattern in &patterns {
-            match pattern {
-                ArgPattern::Literal(lit) => {
-                    if token == lit {
-                        matched = true;
-                        i += 1;
-                        break;
+    for pattern in &ctx.patterns {
+        match pattern {
+            ArgPattern::Literal(lit) => {
+                if token == lit {
+                    let mut next = state.clone();
+                    next.consumed_arg_or_sub = true;
+                    if let Ok(done) =
+                        match_level(ctx, rule, config, rule_idx, argv, pos + 1, next, failures)
+                    {
+                        return Some(done);
                     }
                 }
-                ArgPattern::InlineFlag { flag, template } => {
-                    let sep = if matches!(style, crate::config::arg::ArgStyle::Dos) {
-                        ':'
-                    } else {
-                        '='
-                    };
-                    let prefix = format!("{flag}{sep}");
-                    if token.starts_with(&prefix) {
-                        let value = &token[prefix.len()..];
-                        let cap_name = capture_name(template, &mut arg_counter);
+            }
+            ArgPattern::InlineFlag { flag, template } => {
+                let prefix = format!("{flag}{}", sep_for(ctx.style));
+                if let Some(value) = token.strip_prefix(prefix.as_str()) {
+                    let mut next = state.clone();
+                    next.consumed_arg_or_sub = true;
+                    let cap_name = capture_name(template, &mut next.arg_counter);
+                    if let Err(reason) = validate_template_value(value, template, &config.contracts)
+                    {
+                        record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
+                        next.had_validation_error = true;
+                    }
+                    next.captures.insert(cap_name, value.to_string());
+                    if let Ok(done) =
+                        match_level(ctx, rule, config, rule_idx, argv, pos + 1, next, failures)
+                    {
+                        return Some(done);
+                    }
+                }
+            }
+            ArgPattern::Template(template) => {
+                if !is_flag_like(token, ctx.style) {
+                    let mut next = state.clone();
+                    next.consumed_arg_or_sub = true;
+                    let cap_name = capture_name(template, &mut next.arg_counter);
+                    if let Err(reason) = validate_template_value(token, template, &config.contracts)
+                    {
+                        record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
+                        next.had_validation_error = true;
+                    }
+                    next.captures.insert(cap_name, token.clone());
+                    if let Ok(done) =
+                        match_level(ctx, rule, config, rule_idx, argv, pos + 1, next, failures)
+                    {
+                        return Some(done);
+                    }
+                }
+            }
+            ArgPattern::TemplateContext {
+                prefix,
+                suffix,
+                template,
+            } => {
+                let works = prefix
+                    .as_ref()
+                    .map_or(true, |p| token.starts_with(p.as_str()))
+                    && suffix
+                        .as_ref()
+                        .map_or(true, |s| token.ends_with(s.as_str()));
+                if works {
+                    let base_start = prefix.as_ref().map_or(0, String::len);
+                    let base_end = token.len() - suffix.as_ref().map_or(0, String::len);
+                    if base_start < base_end {
+                        let base = &token[base_start..base_end];
+                        let mut next = state.clone();
+                        next.consumed_arg_or_sub = true;
+                        let cap_name = capture_name(template, &mut next.arg_counter);
                         if let Err(reason) =
-                            validate_template_value(value, template, &config.contracts)
+                            validate_template_value(base, template, &config.contracts)
                         {
-                            record_failure(failures, rule_idx, path, i, token, &reason);
-                            has_error = true;
-                            // Still advance - collect all errors
+                            record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
+                            next.had_validation_error = true;
                         }
-                        captures.insert(cap_name, value.to_string());
-                        matched = true;
-                        i += 1;
-                        break;
-                    }
-                }
-                ArgPattern::Template(template) => {
-                    if !is_flag_like(token, style) {
-                        let cap_name = capture_name(template, &mut arg_counter);
-                        if let Err(reason) =
-                            validate_template_value(token, template, &config.contracts)
+                        next.captures.insert(cap_name, base.to_string());
+                        if let Ok(done) =
+                            match_level(ctx, rule, config, rule_idx, argv, pos + 1, next, failures)
                         {
-                            record_failure(failures, rule_idx, path, i, token, &reason);
-                            has_error = true;
-                        }
-                        captures.insert(cap_name, token.to_string());
-                        matched = true;
-                        i += 1;
-                        break;
-                    }
-                }
-                ArgPattern::TemplateContext {
-                    prefix,
-                    suffix,
-                    template,
-                } => {
-                    let mut works = true;
-                    if let Some(p) = prefix {
-                        if !token.starts_with(p.as_str()) {
-                            works = false;
-                        }
-                    }
-                    if let Some(s) = suffix {
-                        if !token.ends_with(s.as_str()) {
-                            works = false;
-                        }
-                    }
-                    if works {
-                        let base_start = prefix.as_ref().map_or(0, |p| p.len());
-                        let base_end = token.len() - suffix.as_ref().map_or(0, |s| s.len());
-                        if base_start < base_end {
-                            let base = &token[base_start..base_end];
-                            let cap_name = capture_name(template, &mut arg_counter);
-                            if let Err(reason) =
-                                validate_template_value(base, template, &config.contracts)
-                            {
-                                record_failure(failures, rule_idx, path, i, token, &reason);
-                                has_error = true;
-                            }
-                            captures.insert(cap_name, base.to_string());
-                            matched = true;
-                            i += 1;
-                            break;
+                            return Some(done);
                         }
                     }
                 }
             }
         }
-
-        if !matched {
-            record_failure(failures, rule_idx, path, i, token, "not in allowed args");
-            has_error = true;
-            i += 1;
-        }
     }
 
-    if has_error {
-        Err(())
-    } else {
-        Ok(MatchResult {
-            rule_index: rule_idx,
-            captures,
-            subcommand_path: path.to_vec(),
-        })
-    }
-}
-
-pub(crate) fn match_remaining_args(
-    rule_idx: usize,
-    config: &Config,
-    argv: &[String],
-    start: usize,
-    path: &[String],
-    subcommand: &Subcommand,
-    failures: &mut Vec<MatchFailure>,
-) -> Result<MatchResult, ()> {
-    let style = effective_style(&config.rules[rule_idx], Some(subcommand));
-    match_remaining_args_inner(
-        rule_idx,
-        config,
-        argv,
-        start,
-        path,
-        &subcommand.args,
-        style,
-        failures,
-    )
+    None
 }
 
 pub(crate) fn capture_name(template: &TemplateType, counter: &mut usize) -> String {
-    match template {
-        TemplateType::ContractRef(name) => name.clone(),
-        _ => {
-            let n = *counter;
-            *counter += 1;
-            format!("arg_{n}")
-        }
+    if let TemplateType::ContractRef(name) = template {
+        name.clone()
+    } else {
+        let n = *counter;
+        *counter += 1;
+        format!("arg_{n}")
     }
 }
 
@@ -1348,5 +1394,202 @@ mod tests {
         let argv = vec!["dos-inline".into(), "/depth:10".into()];
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.captures.get("arg_0").unwrap(), "10");
+    }
+    // ---- Trailing / interleaved flag orders (transparent CLI semantics) ----
+
+    #[test]
+    fn test_flag_after_positional_arg() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into(), "-i".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(&cfg, &["df".into(), "/var".into(), "-h".into()]);
+        assert!(result.is_ok(), "expected 'df /var -h' to match");
+    }
+
+    #[test]
+    fn test_flag_then_positional_arg() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into(), "-i".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(&cfg, &["df".into(), "-h".into(), "/var".into()]);
+        assert!(result.is_ok(), "expected 'df -h /var' to match");
+    }
+
+    #[test]
+    fn test_interleaved_flags_and_args() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into(), "{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into(), "-i".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(
+            &cfg,
+            &[
+                "df".into(),
+                "/".into(),
+                "-h".into(),
+                "/var".into(),
+                "-i".into(),
+            ],
+        );
+        assert!(result.is_ok(), "expected interleaved flags/args to match");
+    }
+
+    #[test]
+    fn test_subcommand_flag_after_positional_args() {
+        let cfg = make_config();
+        let result = match_command(
+            &cfg,
+            &[
+                "git".into(),
+                "status".into(),
+                "myfile".into(),
+                "--porcelain".into(),
+            ],
+        );
+        assert!(
+            result.is_ok(),
+            "expected 'git status myfile --porcelain' to match"
+        );
+    }
+
+    #[test]
+    fn test_disallowed_flag_after_positional_still_denied() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(&cfg, &["df".into(), "/var".into(), "--follow".into()]);
+        assert!(
+            result.is_err(),
+            "expected disallowed trailing flag to be denied"
+        );
+    }
+
+    #[test]
+    fn test_disallowed_flag_between_args_still_denied() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into(), "{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(
+            &cfg,
+            &["df".into(), "/".into(), "--follow".into(), "/var".into()],
+        );
+        assert!(
+            result.is_err(),
+            "expected disallowed interleaved flag to be denied"
+        );
+    }
+
+    #[test]
+    fn test_value_taking_flag_then_flag_then_arg() {
+        // -n 3 --no-pager <path>: value flag, standalone flag, then positional
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("tail".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-n".into(), "--no-pager".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(
+            &cfg,
+            &[
+                "tail".into(),
+                "-n".into(),
+                "3".into(),
+                "--no-pager".into(),
+                "/var/log/x".into(),
+            ],
+        );
+        assert!(
+            result.is_ok(),
+            "expected 'tail -n 3 --no-pager <path>' to match"
+        );
+    }
+
+    #[test]
+    fn test_repeated_flags_anywhere() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["-h".into(), "-i".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(&cfg, &["df".into(), "-h".into(), "/".into(), "-h".into()]);
+        assert!(
+            result.is_ok(),
+            "repeated flags should be accepted in any position"
+        );
+    }
+
+    #[test]
+    fn test_flag_eq_value_after_positional() {
+        let mut cfg = make_config();
+        cfg.rules.push(Rule {
+            action: Action::ShowHelp,
+            command: Some("df".into()),
+            args: vec!["{string}".into()],
+            pre_args: vec![],
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags: vec!["--output".into()],
+            subcommands: vec![],
+        });
+        let result = match_command(&cfg, &["df".into(), "/var".into(), "--output=json".into()]);
+        assert!(result.is_ok(), "flag=value after positional should match");
     }
 }
