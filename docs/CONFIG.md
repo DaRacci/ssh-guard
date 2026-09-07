@@ -111,6 +111,33 @@ type = "enum"
 values = ["sshd", "nginx"]
 ```
 
+### Capture names
+
+Every template argument captures its matched value so file actions can
+reference it:
+
+| Arg pattern | Capture name |
+| -------------------- | ------------------------- |
+| `{name:template}` | `name` (explicit, preferred) |
+| `{contract}` | the contract's name |
+| `{string}` / `{int}` / `{any}` | positional (`arg_0`, `arg_1`, ...) |
+
+Use explicit named captures when a file action needs the value:
+
+```toml
+[[rules]]
+action = { type = "read_file", path_capture = "path", root_set = "roots" }
+command = "cat"
+args = ["{path:string}"]
+```
+
+`path_capture` / `lines_capture` accept the name with or without braces
+(`"path"` or `"{path}"` both resolve to a capture named `path`).
+
+Note: bare builtins like `{string}` capture positionally, so
+`path_capture = "{string}"` can never resolve. `ssh-guard validate`
+rejects such configs at load time with an error naming the field.
+
 ---
 
 ## Profiles
