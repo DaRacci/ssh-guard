@@ -2,6 +2,8 @@ use std::error::Error;
 
 use crate::{
     config::{Config, action::Action, rule::Rule},
+    engine::parse::parse_arg_pattern,
+    engine::types::ArgPattern,
     errors::GuardError,
 };
 
@@ -48,8 +50,89 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+/// Every capture key the rule's args can produce, walking subcommands too.
+///
+/// Mirrors the matcher's naming: named captures and contract refs capture
+/// under their name; unnamed builtins capture positionally as `arg_N`.
+fn collect_capture_keys(args: &[String], out: &mut Vec<String>) {
+    for raw in args {
+        let pattern = parse_arg_pattern(raw);
+        let key = match &pattern {
+            ArgPattern::Template(t)
+            | ArgPattern::InlineFlag { template: t, .. }
+            | ArgPattern::TemplateContext { template: t, .. } => t.capture_key(),
+            ArgPattern::Literal(_) => None,
+        };
+        if let Some(name) = key {
+            out.push(name.to_string());
+        }
+    }
+}
+
+/// Reject file-action capture references that the rule's args can never produce.
+/// Accepts references with or without braces (`"path"` / `"{path}"`).
+fn validate_action_captures(rule: &Rule, index: usize, scope: &str, errors: &mut Vec<String>) {
+    let mut references: Vec<(&str, &str)> = match &rule.action {
+        Action::ReadFile { path_capture, .. }
+        | Action::StatPath { path_capture, .. }
+        | Action::ListDir { path_capture, .. } => {
+            vec![("path_capture", path_capture.as_str())]
+        }
+        Action::TailFile {
+            path_capture,
+            lines_capture,
+            ..
+        } => {
+            let mut refs = vec![("path_capture", path_capture.as_str())];
+            if let Some(lines) = lines_capture {
+                refs.push(("lines_capture", lines.as_str()));
+            }
+            refs
+        }
+        Action::Run { .. } | Action::ShowHelp => return,
+    };
+    references.shrink_to_fit();
+
+    let mut keys = Vec::new();
+    collect_capture_keys(&rule.args, &mut keys);
+    collect_capture_keys_recursive(&rule.subcommands, &mut keys);
+
+    for (field, reference) in references {
+        let name = reference
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}');
+        if name.is_empty() {
+            continue;
+        }
+        if keys.iter().any(|k| k == name) {
+            continue;
+        }
+        let available = if keys.is_empty() {
+            "none".to_string()
+        } else {
+            keys.join(", ")
+        };
+        errors.push(format!(
+            "{scope} rule[{index}]: {field} '{reference}' does not match any capture the rule's args produce (available: {available}). Use a named capture like {{{name}:string}} in args, or a contract arg named '{name}'."
+        ));
+    }
+}
+
+fn collect_capture_keys_recursive(
+    subs: &[crate::config::subcommand::Subcommand],
+    out: &mut Vec<String>,
+) {
+    for sub in subs {
+        collect_capture_keys(&sub.args, out);
+        collect_capture_keys_recursive(&sub.subcommands, out);
+    }
+}
+
 fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
     for (i, rule) in rules.iter().enumerate() {
+        validate_action_captures(rule, i, scope, errors);
+
         if let Action::Run { binary, .. } = &rule.action {
             let path = std::path::Path::new(binary);
             if !path.exists() {
@@ -226,6 +309,7 @@ implicit_symlinks = true
 
 [[rules]]
 action = {{ type = "read_file", path_capture = "{{file}}", root_set = "data" }}
+args = ["{{file:string}}"]
 
 [[rules]]
 action = {{ type = "show_help" }}
@@ -235,6 +319,86 @@ action = {{ type = "show_help" }}
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_rejects_unmatched_path_capture() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "{string}", root_set = "roots" }
+            command = "cat"
+            args = ["{string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_err(), "expected Err for unmatched path_capture");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("path_capture") && msg.contains("{string}"),
+            "expected error naming path_capture and '{{string}}', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_named_capture() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "path", root_set = "roots" }
+            command = "cat"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(
+            result.is_ok(),
+            "expected Ok for named capture, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_braced_capture_reference() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "{path}", root_set = "roots" }
+            command = "cat"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(
+            result.is_ok(),
+            "expected Ok for braced capture reference, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_unmatched_lines_capture() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "tail_file", path_capture = "path", lines_capture = "n", root_set = "roots" }
+            command = "tail"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_err(), "expected Err for unmatched lines_capture");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("lines_capture"),
+            "expected error naming lines_capture, got: {msg}"
+        );
     }
 
     #[test]

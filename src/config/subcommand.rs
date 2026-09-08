@@ -25,7 +25,7 @@ pub struct Subcommand {
     pub args: Vec<String>,
 
     /// Static args injected after this subcommand name at execution time.
-    /// No template substitution.
+    /// `{name}` / `{name:-default}` placeholders are substituted from match captures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_args: Vec<String>,
 

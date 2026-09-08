@@ -58,20 +58,86 @@ fn find_sub_by_name<'a>(subs: &'a [Subcommand], name: &str) -> Option<&'a Subcom
     subs.iter().find(|s| s.name == name)
 }
 
+/// Substitute `{name}` and `{name:-default}` placeholders in a config-sourced
+/// argument with values from the match captures.
+///
+/// Fail-closed: a placeholder with no matching capture and no default is an error,
+/// never passed through to the binary as a literal token.
+/// `\{` and `\}` escape a literal brace; `\\` escapes a backslash.
+fn substitute_arg_template<S: ::std::hash::BuildHasher>(
+    arg: &str,
+    captures: &HashMap<String, String, S>,
+) -> Result<String, GuardError> {
+    let mut out = String::with_capacity(arg.len());
+    let mut chars = arg.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some(&e @ ('{' | '}' | '\\')) => {
+                    out.push(e);
+                    chars.next();
+                }
+                _ => out.push(c),
+            }
+        } else if c == '{' {
+            let mut inner = String::new();
+            let mut closed = false;
+            for ic in chars.by_ref() {
+                if ic == '}' {
+                    closed = true;
+                    break;
+                }
+                inner.push(ic);
+            }
+            if !closed {
+                out.push('{');
+                out.push_str(&inner);
+                continue;
+            }
+            let (name, default) = match inner.split_once(":-") {
+                Some((n, d)) => (n, Some(d)),
+                None => (inner.as_str(), None),
+            };
+            if let Some(value) = captures.get(name) {
+                out.push_str(value);
+            } else if let Some(value) = default {
+                out.push_str(value);
+            } else {
+                return Err(GuardError::Action(format!(
+                    "missing capture '{name}' for template '{arg}'"
+                )));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Ok(out)
+}
+
 /// Build the final argv for a `Run` action.
 ///
 /// Subcommand names are auto-injected from `sub.name`, followed by `pre_args`.
-/// Only `action.args`, auto-injected subcommand names, `pre_args`, and
-/// user-supplied flags/positionals appear in the final argv.
-fn build_command_argv(
+/// `{name}` placeholders in `action.args` and all `pre_args` (rule-level and
+/// subcommand-level) are resolved from the match captures, with
+/// `{name:-default}` fallbacks.
+/// Only config-sourced strings and user-supplied flags/positionals appear in
+/// the final argv; user tokens are never template-substituted.
+fn build_command_argv<S: ::std::hash::BuildHasher>(
     rule: &Rule,
     subcommand_path: &[String],
     user_argv: &[String],
-) -> Vec<String> {
+    captures: &HashMap<String, String, S>,
+) -> Result<Vec<String>, GuardError> {
     let mut argv: Vec<String> = Vec::new();
 
     if let Action::Run { args, .. } = &rule.action {
-        argv.extend(args.clone());
+        for arg in args {
+            argv.push(substitute_arg_template(arg, captures)?);
+        }
+    }
+
+    for arg in &rule.pre_args {
+        argv.push(substitute_arg_template(arg, captures)?);
     }
 
     // 2. Skip command routing token (first token that matched rule.command_name())
@@ -96,7 +162,9 @@ fn build_command_argv(
             // Routing token - auto-inject sub.name + pre_args
             if let Some(sub) = find_sub_by_name(subs, &subcommand_path[sub_level]) {
                 argv.push(sub.name.clone());
-                argv.extend(sub.pre_args.clone());
+                for arg in &sub.pre_args {
+                    argv.push(substitute_arg_template(arg, captures)?);
+                }
                 subs = &sub.subcommands;
             }
             sub_level += 1;
@@ -109,7 +177,7 @@ fn build_command_argv(
         argv.extend_from_slice(&user_argv[i..]);
     }
 
-    argv
+    Ok(argv)
 }
 
 fn action_run(
@@ -254,36 +322,68 @@ fn action_list_dir(path_str: &str, config: &Config) -> Result<(), GuardError> {
     Ok(())
 }
 
-fn execute_run(
+fn execute_run<S: ::std::hash::BuildHasher>(
     _config: &Config,
     rule: &Rule,
     subcommand_path: &[String],
+    captures: &HashMap<String, String, S>,
     user_argv: &[String],
 ) -> Result<i32, GuardError> {
     if let Action::Run {
         binary, timeout, ..
     } = &rule.action
     {
-        let argv = build_command_argv(rule, subcommand_path, user_argv);
+        let argv = build_command_argv(rule, subcommand_path, user_argv, captures)?;
         action_run(binary, &argv, rule.implicit_symlinks, timeout)
     } else {
         Err(GuardError::Action("expected Run action".into()))
     }
 }
 
-fn execute_read_file(
+/// Resolve a capture reference from the match captures.
+///
+/// File-action fields may be written with or without template braces: both
+/// `"path"` and `"{path}"` resolve to the capture stored under key `path`.
+/// If the exact key is missing, the braced form is also tried so
+/// `{path}`-style references match contract-named captures.
+fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
+    captures: &'a HashMap<String, String, S>,
+    reference: &str,
+) -> Option<&'a String> {
+    if let Some(v) = captures.get(reference) {
+        return Some(v);
+    }
+    let trimmed = reference.trim();
+    let braced = trimmed.len() > 2
+        && trimmed.starts_with('{')
+        && trimmed.ends_with('}')
+        // A backslash before the opening brace escapes it: `\{x}` is literal.
+        && !trimmed.as_bytes()[..trimmed.len() - 1]
+            .iter()
+            .rev()
+            .any(|b| *b == b'\\')
+        && trimmed[1..trimmed.len() - 1].chars().all(|c| c != '{' && c != '}' && c != '\\');
+    if braced {
+        return captures.get(&trimmed[1..trimmed.len() - 1]);
+    }
+    None
+}
+
+fn execute_read_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, String, S>,
 ) -> Result<i32, GuardError> {
     if let Action::ReadFile {
         path_capture,
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -294,10 +394,10 @@ fn execute_read_file(
     }
 }
 
-fn execute_tail_file(
+fn execute_tail_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, String, S>,
 ) -> Result<i32, GuardError> {
     if let Action::TailFile {
         path_capture,
@@ -306,12 +406,14 @@ fn execute_tail_file(
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         let lines = lines_capture
             .as_ref()
-            .and_then(|lc| captures.get(lc.as_str()))
+            .and_then(|lc| lookup_capture(captures, lc))
             .and_then(|l| l.parse::<usize>().ok())
             .unwrap_or(*default_lines);
         if root_set != "roots" {
@@ -324,19 +426,21 @@ fn execute_tail_file(
     }
 }
 
-fn execute_stat_path(
+fn execute_stat_path<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, String, S>,
 ) -> Result<i32, GuardError> {
     if let Action::StatPath {
         path_capture,
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -347,19 +451,21 @@ fn execute_stat_path(
     }
 }
 
-fn execute_list_dir(
+fn execute_list_dir<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, String, S>,
 ) -> Result<i32, GuardError> {
     if let Action::ListDir {
         path_capture,
         root_set,
     } = action
     {
-        let path = captures
-            .get(path_capture.as_str())
-            .ok_or_else(|| GuardError::Action(format!("missing capture '{path_capture}'")))?;
+        let path = lookup_capture(captures, path_capture).ok_or_else(|| {
+            GuardError::Action(format!(
+                "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
+            ))
+        })?;
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
@@ -375,11 +481,29 @@ fn execute_show_help(config: &Config) -> Result<i32, GuardError> {
     Ok(0)
 }
 
-pub fn execute(
+/// Build the executable argv for a rule without running the binary.
+///
+/// Test and audit seam over `build_command_argv`: same template substitution
+/// and fail-closed behavior, no side effects.
+///
+/// # Errors
+///
+/// Returns an error when a `{name}` placeholder in the rule's config-sourced
+/// args has no matching capture and no `{name:-default}` fallback.
+pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
+    rule: &Rule,
+    subcommand_path: &[String],
+    captures: &HashMap<String, String, S>,
+    user_argv: &[String],
+) -> Result<Vec<String>, GuardError> {
+    build_command_argv(rule, subcommand_path, user_argv, captures)
+}
+
+pub fn execute<S: ::std::hash::BuildHasher>(
     config: &Config,
     rule: &Rule,
     subcommand_path: &[String],
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, String, S>,
     user_argv: &[String],
 ) -> Result<i32, GuardError> {
     let action_tag = match &rule.action {
@@ -392,7 +516,7 @@ pub fn execute(
     };
 
     match action_tag {
-        0 => execute_run(config, rule, subcommand_path, user_argv),
+        0 => execute_run(config, rule, subcommand_path, captures, user_argv),
         1 => execute_read_file(config, &rule.action, captures),
         2 => execute_tail_file(config, &rule.action, captures),
         3 => execute_stat_path(config, &rule.action, captures),
@@ -476,7 +600,8 @@ mod tests {
         ];
         let subcommand_path = vec!["status".to_string()];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         // Should produce: systemctl --no-pager status --no-pager --full angrr
         assert_eq!(
@@ -501,7 +626,8 @@ mod tests {
         ];
         let subcommand_path = vec!["show".to_string()];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         assert_eq!(
             result,
@@ -527,7 +653,8 @@ mod tests {
         ];
         let subcommand_path: Vec<String> = vec![];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         // Command token skipped, everything else passed through
         assert_eq!(
@@ -548,7 +675,8 @@ mod tests {
         let user_argv = vec!["journalctl".to_string()];
         let subcommand_path: Vec<String> = vec![];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         assert_eq!(result, vec!["--no-pager".to_string()]);
     }
@@ -596,7 +724,8 @@ mod tests {
         ];
         let subcommand_path = vec!["remote".to_string(), "add".to_string()];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         assert_eq!(
             result,
@@ -621,7 +750,8 @@ mod tests {
         ];
         let subcommand_path = vec!["status".to_string()];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         // Command token not skipped (argv[0] != "systemctl"), passes through as regular token
         // "status" matches routing → inject "status" + pre_args
@@ -645,7 +775,8 @@ mod tests {
         let user_argv = vec!["journalctl".to_string()];
         let subcommand_path: Vec<String> = vec![];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         assert_eq!(result, vec!["--no-pager".to_string()]);
     }
@@ -678,7 +809,7 @@ mod tests {
         };
         let user_argv = vec!["cmd".to_string(), "sub".to_string(), "arg1".to_string()];
         let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv);
+        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
         assert_eq!(
             result,
             vec![
@@ -744,7 +875,7 @@ mod tests {
             "add".to_string(),
             "verbose".to_string(),
         ];
-        let result = build_command_argv(&rule, &sub_path, &user_argv);
+        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
         assert_eq!(
             result,
             vec![
@@ -793,7 +924,7 @@ mod tests {
             "extra".to_string(),
         ];
         let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv);
+        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
         assert_eq!(
             result,
             vec![
@@ -818,7 +949,7 @@ mod tests {
             "sshd".into(),
         ];
         let sub_path = vec!["status".into()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv);
+        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
         assert_eq!(
             result,
             vec![
@@ -853,7 +984,8 @@ mod tests {
         let user_argv = vec!["somecmd".to_string()];
         let subcommand_path: Vec<String> = vec![];
 
-        let result = build_command_argv(&rule, &subcommand_path, &user_argv);
+        let result =
+            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
 
         // No action args (ReadFile has none), no cmd_name to skip,
         // no subcommands -> user_argv passes through verbatim
@@ -888,7 +1020,7 @@ mod tests {
         };
         let user_argv = vec!["cmd".to_string(), "sub".to_string()];
         let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv);
+        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
         assert_eq!(result, vec!["sub".to_string(), "--internal".to_string()]);
     }
 
@@ -1393,7 +1525,7 @@ mod tests {
             pre_args: vec![],
             subcommands: vec![],
         };
-        let result = execute_run(&config, &rule, &[], &[]);
+        let result = execute_run(&config, &rule, &[], &HashMap::new(), &[]);
         assert_eq!(result.unwrap(), 0);
     }
 
@@ -1411,7 +1543,7 @@ mod tests {
             pre_args: vec![],
             subcommands: vec![],
         };
-        let result = execute_run(&config, &rule, &[], &[]);
+        let result = execute_run(&config, &rule, &[], &HashMap::new(), &[]);
         assert!(
             matches!(&result, Err(GuardError::Action(msg)) if msg == "expected Run action"),
             "expected 'expected Run action' error, got {result:?}"
@@ -1762,6 +1894,71 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Tests for lookup_capture brace tolerance
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_lookup_capture_accepts_braced_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("data.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+        let action = Action::ReadFile {
+            path_capture: "{path}".into(),
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_lookup_capture_named_capture_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("app.log");
+        std::fs::write(&file_path, "l1\nl2\nl3\n").unwrap();
+
+        let config = Config {
+            roots: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        };
+        let action = Action::TailFile {
+            path_capture: "path".into(),
+            lines_capture: Some("n".into()),
+            default_lines: 10,
+            root_set: "roots".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+        captures.insert("n".into(), "2".into());
+
+        let result = execute_tail_file(&config, &action, &captures);
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_missing_capture_error_names_field_and_fix() {
+        let config = Config::default();
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "roots".into(),
+        };
+        let captures = HashMap::new();
+        let result = execute_read_file(&config, &action, &captures);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("missing capture 'path'") && err.contains("{path:string}"),
+            "expected actionable error, got: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Tests for execute_show_help
     // -----------------------------------------------------------------------
 
@@ -1983,5 +2180,146 @@ mod tests {
         // This test verifies dispatch for ShowHelp works.
         let result = execute(&config, &rule, &[], &captures, &[]);
         assert_eq!(result.unwrap(), 0);
+    }
+    #[test]
+    fn test_substitute_plain_name() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "2".to_string());
+        let result = substitute_arg_template("-d{depth}", &captures).unwrap();
+        assert_eq!(result, "-d2");
+    }
+
+    #[test]
+    fn test_substitute_multiple_placeholders() {
+        let mut captures = HashMap::new();
+        captures.insert("unit".to_string(), "sshd".to_string());
+        let result = substitute_arg_template("{unit}.service", &captures).unwrap();
+        assert_eq!(result, "sshd.service");
+    }
+
+    #[test]
+    fn test_substitute_default_used_when_capture_missing() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("{depth:-1}", &captures).unwrap();
+        assert_eq!(result, "1");
+    }
+
+    #[test]
+    fn test_substitute_capture_wins_over_default() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "3".to_string());
+        let result = substitute_arg_template("{depth:-1}", &captures).unwrap();
+        assert_eq!(result, "3");
+    }
+
+    #[test]
+    fn test_substitute_missing_capture_no_default_fails() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("-d{depth}", &captures);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing capture 'depth'"), "{err}");
+    }
+
+    #[test]
+    fn test_substitute_literal_without_placeholders() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("--no-pager", &captures).unwrap();
+        assert_eq!(result, "--no-pager");
+    }
+
+    #[test]
+    fn test_substitute_unclosed_brace_is_literal() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("we{ird", &captures).unwrap();
+        assert_eq!(result, "we{ird");
+    }
+
+    #[test]
+    fn test_substitute_escaped_brace_is_literal() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "2".to_string());
+        // \{ stays a literal '{' even with a matching '}' later.
+        let result = substitute_arg_template(r"\{depth}", &captures).unwrap();
+        assert_eq!(result, "{depth}");
+    }
+
+    #[test]
+    fn test_substitute_escaped_brace_mixed_with_placeholder() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "2".to_string());
+        let result = substitute_arg_template(r"-d{depth} \{literal\}", &captures).unwrap();
+        assert_eq!(result, "-d2 {literal}");
+    }
+
+    #[test]
+    fn test_substitute_escaped_backslash() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template(r"a\\b\{x}", &captures).unwrap();
+        assert_eq!(result, r"a\b{x}");
+    }
+
+    #[test]
+    fn test_substitute_trailing_backslash_is_literal() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("path\\", &captures).unwrap();
+        assert_eq!(result, "path\\");
+    }
+
+    #[test]
+    fn test_lookup_capture_rejects_escaped_brace_reference() {
+        let mut captures = HashMap::new();
+        captures.insert("path".to_string(), "/etc/hostname".to_string());
+        // A backslash-escaped opening brace is not a braced reference.
+        assert!(lookup_capture(&captures, r"\{path}").is_none());
+        assert!(lookup_capture(&captures, "{path}").is_some());
+        assert!(lookup_capture(&captures, "path").is_some());
+    }
+
+    #[test]
+    fn test_build_command_substitutes_action_args_and_pre_args() {
+        let mut rule = make_simple_rule();
+        if let Action::Run { args, .. } = &mut rule.action {
+            args.clear();
+            args.push("-d{depth:-2}".into());
+        }
+        rule.args = vec!["{any}".into()];
+        rule.subcommands = vec![Subcommand {
+            name: "top".into(),
+            arg_style: None,
+            flag_groups: vec![],
+            flags: vec![],
+            args: vec![],
+            pre_args: vec!["--root={root:-/srv}".into()],
+            subcommands: vec![],
+        }];
+
+        let mut captures = HashMap::new();
+        captures.insert("root".to_string(), "/data".to_string());
+
+        let user_argv = vec!["journalctl".to_string(), "top".to_string()];
+        let result =
+            build_command_argv(&rule, &["top".to_string()], &user_argv, &captures).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                "-d2".to_string(),
+                "top".to_string(),
+                "--root=/data".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_command_missing_capture_is_error() {
+        let mut rule = make_simple_rule();
+        if let Action::Run { args, .. } = &mut rule.action {
+            args.clear();
+            args.push("-d{depth}".into());
+        }
+        rule.args = vec!["{any}".into()];
+
+        let user_argv = vec!["journalctl".to_string(), "/var".to_string()];
+        let result = build_command_argv(&rule, &[], &user_argv, &HashMap::new());
+        assert!(result.is_err());
     }
 }

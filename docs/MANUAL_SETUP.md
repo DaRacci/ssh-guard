@@ -15,8 +15,8 @@ For help with common problems, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 1. [Install the binary](#install-the-binary)
 1. [Wire it into SSH](#wire-it-into-ssh)
 1. [Validate the config](#validate-the-config)
-1. [Verify it works end-to-end](#verify-it-works-end-to-end)
-1. [Summary of setup steps](#summary-of-setup-steps)
+1. [Verify it works](#verify-it-works)
+1. [Example user setup workflow](#example-user-setup-workflow)
 
 ---
 
@@ -127,9 +127,9 @@ Common validation failures:
 
 ---
 
-## Verify it works end-to-end
+## Verify it works
 
-### 1. Confirm the audit log is writable
+### Confirm the audit log is writable
 
 During execution ssh-guard appends to the path specific for `audit_log`.
 Ensure all users that will run the guard can write to this location.
@@ -140,7 +140,7 @@ tee /var/log/ssh-guard-audit.log <<< "test"
 tail -n 1 /var/log/ssh-guard-audit.log
 ```
 
-### 2. Test the guard directly
+### Test the guard directly
 
 You can simulate what OpenSSH does by setting `SSH_ORIGINAL_COMMAND` and running the guard:
 
@@ -151,7 +151,7 @@ SSH_ORIGINAL_COMMAND="systemctl status sshd" \
 
 You should see the `systemctl status sshd` output.
 
-### 3. Test a denied command
+### Test a denied command
 
 ```sh
 SSH_ORIGINAL_COMMAND="rm -rf /" \
@@ -160,7 +160,7 @@ SSH_ORIGINAL_COMMAND="rm -rf /" \
 
 This should fail with `no matching rule` and exit non-zero.
 
-### 4. Check the audit log
+### Check the audit log
 
 ```sh
 tail -n 20 /var/log/ssh-guard-audit.log
@@ -168,7 +168,7 @@ tail -n 20 /var/log/ssh-guard-audit.log
 
 You should see one `allowed` entry for the `systemctl status sshd` test and one `denied` entry for the `rm -rf /` test.
 
-### 5. Validate the SSH Command routing
+### Validate the SSH Command routing
 
 From another machine:
 
@@ -179,7 +179,109 @@ ssh restricted-user@your-host "systemctl status sshd"
 This should run the allowed command. Then try something not allowed:
 
 ```sh
-ssh restricted-user@your-host "rm -rf /"
+ssh restricted-user@your-host "ls /"
 ```
 
 This should be denied. Confirm both appear in the audit log.
+
+---
+
+## Example user setup workflow
+
+This is an example workflow to setup a dedicated user, taking it from "no account exists" to "can SSH in and run only the commands their profile allows".
+
+The example creates a user `deploy` with a single `systemctl status <unit>` rule.
+
+For simplicity the user and group are defined as shell vars and assumed to be present in all the following shell commands.
+Adapt names, paths, and rules to your environment.
+
+```sh
+GUARD_USER=deploy
+GUARD_GROUP=restricted
+```
+
+### Create the user and group
+
+Create a group for restricted accounts and the user itself:
+
+```sh
+sudo groupadd --system "$GUARD_GROUP"
+sudo useradd --create-home --shell /bin/bash --groups "$GUARD_GROUP" "$GUARD_USER"
+```
+
+### Install an allowed SSH public key
+
+Initialise `~/.ssh` for the user, droping in the public key.
+
+```sh
+sudo install -d -m 0700 -o "$GUARD_USER" -g "$GUARD_USER" /home/$GUARD_USER/.ssh
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... $GUARD_USER@laptop" | sudo tee /home/$GUARD_USER/.ssh/authorized_keys
+sudo chown "$GUARD_USER":"$GUARD_USER" /home/$GUARD_USER/.ssh/authorized_keys
+sudo chmod 0600 /home/$GUARD_USER/.ssh/authorized_keys
+```
+
+If only this key should be behind ssh-guard, prefix the line with the `command=` directive shown in [Per-key `command=` in `authorized_keys`](#per-key-command-in-authorized_keys).
+If you rely on the `ForceCommand` `Match` block instead, leave the line as-is.
+
+### Add a basic profile for the user
+
+Append a `[profiles.example]` section to `/etc/ssh_guard/config.toml`:
+
+```toml
+[profiles.example]
+users = ["deploy"]
+
+[profiles.deploy.global]
+help_text = """
+Allowed commands:
+  systemctl status <unit>
+"""
+
+[[profiles.deploy.rules]]
+action = { type = "run", binary = "/usr/bin/systemctl", args = [], timeout = "5s" }
+implicit_symlinks = true
+
+[[profiles.deploy.rules.subcommands]]
+name = "status"
+args = ["{string}.service"]
+```
+
+### Add the sshd config for the user
+
+Add a `Match` block in `/etc/ssh/sshd_config`:
+
+```sshd_config
+Match User deploy
+    ForceCommand /usr/local/bin/ssh-guard run --config /etc/ssh_guard/config.toml
+    PermitTTY no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    X11Forwarding no
+```
+
+Then check the syntax and reload:
+
+```sh
+sudo -S -p '' sshd -t && sudo -S -p '' systemctl reload sshd
+```
+
+### Validate the setup
+
+Validate the config first:
+
+```sh
+ssh-guard validate --config /etc/ssh_guard/config.toml
+```
+
+From another machine:
+
+```sh
+ssh deploy@your-host "systemctl status sshd"   # should succeed
+ssh deploy@your-host "ls /"                    # should be denied
+```
+
+Confirm both events show up in the audit log:
+
+```sh
+tail /var/log/ssh-guard-audit.log
+```
