@@ -61,37 +61,56 @@ fn find_sub_by_name<'a>(subs: &'a [Subcommand], name: &str) -> Option<&'a Subcom
 /// Substitute `{name}` and `{name:-default}` placeholders in a config-sourced
 /// argument with values from the match captures.
 ///
-/// Fail-closed: a placeholder with no matching capture and no default is an
-/// error, never passed through to the binary as a literal token.
+/// Fail-closed: a placeholder with no matching capture and no default is an error,
+/// never passed through to the binary as a literal token.
+/// `\{` and `\}` escape a literal brace; `\\` escapes a backslash.
 fn substitute_arg_template<S: ::std::hash::BuildHasher>(
     arg: &str,
     captures: &HashMap<String, String, S>,
 ) -> Result<String, GuardError> {
     let mut out = String::with_capacity(arg.len());
-    let mut rest = arg;
-    while let Some(open) = rest.find('{') {
-        let Some(close_rel) = rest[open..].find('}') else {
-            break;
-        };
-        let close = open + close_rel;
-        out.push_str(&rest[..open]);
-        let inner = &rest[open + 1..close];
-        let (name, default) = match inner.split_once(":-") {
-            Some((n, d)) => (n, Some(d)),
-            None => (inner, None),
-        };
-        if let Some(value) = captures.get(name) {
-            out.push_str(value);
-        } else if let Some(value) = default {
-            out.push_str(value);
+    let mut chars = arg.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some(&e @ ('{' | '}' | '\\')) => {
+                    out.push(e);
+                    chars.next();
+                }
+                _ => out.push(c),
+            }
+        } else if c == '{' {
+            let mut inner = String::new();
+            let mut closed = false;
+            for ic in chars.by_ref() {
+                if ic == '}' {
+                    closed = true;
+                    break;
+                }
+                inner.push(ic);
+            }
+            if !closed {
+                out.push('{');
+                out.push_str(&inner);
+                continue;
+            }
+            let (name, default) = match inner.split_once(":-") {
+                Some((n, d)) => (n, Some(d)),
+                None => (inner.as_str(), None),
+            };
+            if let Some(value) = captures.get(name) {
+                out.push_str(value);
+            } else if let Some(value) = default {
+                out.push_str(value);
+            } else {
+                return Err(GuardError::Action(format!(
+                    "missing capture '{name}' for template '{arg}'"
+                )));
+            }
         } else {
-            return Err(GuardError::Action(format!(
-                "missing capture '{name}' for template '{arg}'"
-            )));
+            out.push(c);
         }
-        rest = &rest[close + 1..];
     }
-    out.push_str(rest);
     Ok(out)
 }
 
@@ -117,9 +136,6 @@ fn build_command_argv<S: ::std::hash::BuildHasher>(
         }
     }
 
-    // Rule-level pre_args: injected at the top level, before any subcommand
-    // name and before user argv. Template-substituted like subcommand
-    // pre_args, fail-closed on missing captures.
     for arg in &rule.pre_args {
         argv.push(substitute_arg_template(arg, captures)?);
     }
@@ -326,11 +342,10 @@ fn execute_run<S: ::std::hash::BuildHasher>(
 
 /// Resolve a capture reference from the match captures.
 ///
-/// File-action fields (`path_capture`, `lines_capture`) may be written with
-/// or without template braces: both `"path"` and `"{path}"` resolve to the
-/// capture stored under key `path` (e.g. produced by `{path:string}` or
-/// `{path}` contract args). If the exact key is missing, the braced form is
-/// also tried so `{path}`-style references match contract-named captures.
+/// File-action fields may be written with or without template braces: both
+/// `"path"` and `"{path}"` resolve to the capture stored under key `path`.
+/// If the exact key is missing, the braced form is also tried so
+/// `{path}`-style references match contract-named captures.
 fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
     captures: &'a HashMap<String, String, S>,
     reference: &str,
@@ -339,7 +354,16 @@ fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
         return Some(v);
     }
     let trimmed = reference.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.len() > 2 {
+    let braced = trimmed.len() > 2
+        && trimmed.starts_with('{')
+        && trimmed.ends_with('}')
+        // A backslash before the opening brace escapes it: `\{x}` is literal.
+        && !trimmed.as_bytes()[..trimmed.len() - 1]
+            .iter()
+            .rev()
+            .any(|b| *b == b'\\')
+        && trimmed[1..trimmed.len() - 1].chars().all(|c| c != '{' && c != '}' && c != '\\');
+    if braced {
         return captures.get(&trimmed[1..trimmed.len() - 1]);
     }
     None
@@ -1883,8 +1907,6 @@ mod tests {
             roots: vec![dir.path().to_string_lossy().to_string()],
             ..Default::default()
         };
-        // Braced reference "{path}" resolves against capture key "path"
-        // (produced by a {path:string} arg or a contract named "path").
         let action = Action::ReadFile {
             path_capture: "{path}".into(),
             root_set: "roots".into(),
@@ -2210,6 +2232,47 @@ mod tests {
         let captures = HashMap::new();
         let result = substitute_arg_template("we{ird", &captures).unwrap();
         assert_eq!(result, "we{ird");
+    }
+
+    #[test]
+    fn test_substitute_escaped_brace_is_literal() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "2".to_string());
+        // \{ stays a literal '{' even with a matching '}' later.
+        let result = substitute_arg_template(r"\{depth}", &captures).unwrap();
+        assert_eq!(result, "{depth}");
+    }
+
+    #[test]
+    fn test_substitute_escaped_brace_mixed_with_placeholder() {
+        let mut captures = HashMap::new();
+        captures.insert("depth".to_string(), "2".to_string());
+        let result = substitute_arg_template(r"-d{depth} \{literal\}", &captures).unwrap();
+        assert_eq!(result, "-d2 {literal}");
+    }
+
+    #[test]
+    fn test_substitute_escaped_backslash() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template(r"a\\b\{x}", &captures).unwrap();
+        assert_eq!(result, r"a\b{x}");
+    }
+
+    #[test]
+    fn test_substitute_trailing_backslash_is_literal() {
+        let captures = HashMap::new();
+        let result = substitute_arg_template("path\\", &captures).unwrap();
+        assert_eq!(result, "path\\");
+    }
+
+    #[test]
+    fn test_lookup_capture_rejects_escaped_brace_reference() {
+        let mut captures = HashMap::new();
+        captures.insert("path".to_string(), "/etc/hostname".to_string());
+        // A backslash-escaped opening brace is not a braced reference.
+        assert!(lookup_capture(&captures, r"\{path}").is_none());
+        assert!(lookup_capture(&captures, "{path}").is_some());
+        assert!(lookup_capture(&captures, "path").is_some());
     }
 
     #[test]

@@ -5,7 +5,7 @@ pub(crate) enum TemplateType {
     String,
     Int,
     Any,
-    /// Explicitly named capture (`{name:template}`): the matched value is
+    /// Explicitly named capture: the matched value is
     /// stored under `name` and validated against the inner template.
     Named {
         name: String,

@@ -26,7 +26,7 @@ args = ["{string}"]
 
 [rules.action]
 type = "run"
-binary = "/nix/store/97d5ygrvqj55f4nx1x34wfdcc7qn11c0-coreutils-9.11/bin/head"
+binary = "/usr/bin/head"
 args = []
 timeout = "5000ms"
 
@@ -39,6 +39,6 @@ args = ["{string}"]
 
 [rules.action]
 type = "run"
-binary = "/nix/store/97d5ygrvqj55f4nx1x34wfdcc7qn11c0-coreutils-9.11/bin/df"
+binary = "/usr/bin/df"
 args = []
 timeout = "5000ms"

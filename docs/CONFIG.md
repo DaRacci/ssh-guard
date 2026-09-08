@@ -113,8 +113,7 @@ values = ["sshd", "nginx"]
 
 ### Capture names
 
-Every template argument captures its matched value so file actions can
-reference it:
+Every template argument captures its matched value so file actions can reference it:
 
 | Arg pattern | Capture name |
 | -------------------- | ------------------------- |
@@ -131,12 +130,12 @@ command = "cat"
 args = ["{path:string}"]
 ```
 
-`path_capture` / `lines_capture` accept the name with or without braces
-(`"path"` or `"{path}"` both resolve to a capture named `path`).
+`path_capture` / `lines_capture` accept the name with or without braces,
+"path" or "{path}" both resolve to a capture named `path`.
 
 Note: bare builtins like `{string}` capture positionally, so
-`path_capture = "{string}"` can never resolve. `ssh-guard validate`
-rejects such configs at load time with an error naming the field.
+`path_capture = "{string}"` can never resolve.
+`ssh-guard validate` rejects such configs at load time with an error naming the field.
 
 ### Template substitution in `action.args` and `pre_args`
 

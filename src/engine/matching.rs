@@ -453,7 +453,6 @@ fn try_arg_patterns(
 
 pub(crate) fn capture_name(template: &TemplateType, counter: &mut usize) -> String {
     match template {
-        // Explicitly named capture: `{name:template}` -> capture "name".
         TemplateType::Named { name, .. } | TemplateType::ContractRef(name) => name.clone(),
         _ => {
             let n = *counter;
@@ -594,7 +593,6 @@ mod tests {
 
     #[test]
     fn test_match_named_capture() {
-        // Rule with a named capture in args: {path:string} -> capture "path".
         let mut cfg = make_config();
         cfg.rules[1] = Rule {
             action: Action::Run {
@@ -615,7 +613,6 @@ mod tests {
         let argv = vec!["cat".into(), "/etc/hostname".into()];
         let result = match_command(&cfg, &argv).unwrap();
         assert_eq!(result.captures.get("path").unwrap(), "/etc/hostname");
-        // No positional fallback capture for named templates.
         assert!(result.captures.get("arg_0").is_none());
     }
 

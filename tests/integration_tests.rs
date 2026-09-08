@@ -688,21 +688,21 @@ fn test_rule_level_pre_args_reach_executed_argv() {
     // Rule-level pre_args (Rule.pre_args, distinct from subcommand
     // pre_args) must be injected into the executed argv — previously they
     // were parsed and validated but silently dropped at execution time.
-    let toml_str = r#"
-[[rules]]
-action = { type = "run", binary = "/bin/du", args = [], timeout = "30s" }
-command = "du"
-implicit_symlinks = true
-arg_style = "gnu_long"
-pre_args = ["--one-file-system", "--human-readable"]
-args = ["{path}"]
+    let value = toml::toml! {
+        [[rules]]
+        action = { type = "run", binary = "/bin/du", args = [], timeout = "30s" }
+        command = "du"
+        implicit_symlinks = true
+        arg_style = "gnu_long"
+        pre_args = ["--one-file-system", "--human-readable"]
+        args = ["{path}"]
 
-[contracts.path]
-type = "string_len"
-min = 1
-max = 256
-"#;
-    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+        [contracts.path]
+        type = "string_len"
+        min = 1
+        max = 256
+    };
+    let cfg: config::Config = value.try_into().unwrap();
     assert_eq!(
         cfg.rules[0].pre_args,
         vec!["--one-file-system", "--human-readable"]
@@ -733,21 +733,22 @@ max = 256
 #[test]
 fn test_rule_level_pre_args_ordered_before_subcommand_pre_args() {
     // Ordering: action.args -> rule pre_args -> subcommand name ->
-    // subcommand pre_args -> user argv. Rule-level pre_args are top-level
-    // flags, so they must come before any injected subcommand name.
-    let toml_str = r#"
-[[rules]]
-action = { type = "run", binary = "/bin/git", args = ["--exec-path=/opt/git"], timeout = "10s" }
-command = "git"
-implicit_symlinks = true
-arg_style = "gnu_long"
-pre_args = ["--no-pager"]
+    // subcommand pre_args -> user argv. Rule-level pre_args are
+    // top-level flags, so they must come before any injected
+    // subcommand name.
+    let value = toml::toml! {
+        [[rules]]
+        action = { type = "run", binary = "/bin/git", args = ["--exec-path=/opt/git"], timeout = "10s" }
+        command = "git"
+        implicit_symlinks = true
+        arg_style = "gnu_long"
+        pre_args = ["--no-pager"]
 
-[[rules.subcommands]]
-name = "log"
-pre_args = ["--graph"]
-"#;
-    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+        [[rules.subcommands]]
+        name = "log"
+        pre_args = ["--graph"]
+    };
+    let cfg: config::Config = value.try_into().unwrap();
 
     let argv: Vec<String> = ["git", "log"].iter().map(|s| s.to_string()).collect();
     let matched = ssh_guard::engine::match_command(&cfg, &argv).unwrap();
@@ -776,21 +777,21 @@ fn test_rule_level_pre_args_template_substitution() {
     // Rule-level pre_args support the same {name} / {name:-default}
     // placeholder substitution as action.args and subcommand pre_args,
     // failing closed on a missing capture with no default.
-    let toml_str = r#"
-[[rules]]
-action = { type = "run", binary = "/bin/git", args = [], timeout = "10s" }
-command = "git"
-implicit_symlinks = true
-arg_style = "gnu_long"
-pre_args = ["-c", "safe.directory={repo:-*}"]
-args = ["{path}"]
+    let value = toml::toml! {
+        [[rules]]
+        action = { type = "run", binary = "/bin/git", args = [], timeout = "10s" }
+        command = "git"
+        implicit_symlinks = true
+        arg_style = "gnu_long"
+        pre_args = ["-c", "safe.directory={repo:-*}"]
+        args = ["{path}"]
 
-[contracts.path]
-type = "string_len"
-min = 1
-max = 256
-"#;
-    let cfg: config::Config = toml::from_str(toml_str).unwrap();
+        [contracts.path]
+        type = "string_len"
+        min = 1
+        max = 256
+    };
+    let cfg: config::Config = value.clone().try_into().unwrap();
 
     // No capture named 'repo' -> the default applies.
     let argv: Vec<String> = ["git", "/srv/repo"].iter().map(|s| s.to_string()).collect();
@@ -812,10 +813,9 @@ max = 256
         ]
     );
 
-    // A placeholder with no matching capture and no default is denied
-    // (fail-closed), never passed through as a literal token.
-    let toml_str_nodefault = toml_str.replace("{repo:-*}", "{repo}");
-    let cfg2: config::Config = toml::from_str(&toml_str_nodefault).unwrap();
+    // A config without the default must deny the placeholder fail-closed.
+    let mut cfg2: config::Config = value.try_into().unwrap();
+    cfg2.rules[0].pre_args = vec!["-c".to_string(), "safe.directory={repo}".to_string()];
     let matched = ssh_guard::engine::match_command(&cfg2, &argv).unwrap();
     let rule = &cfg2.rules[matched.rule_index];
     let built = ssh_guard::actions::execute_argv_for_test(

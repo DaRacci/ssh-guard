@@ -52,9 +52,8 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
 
 /// Every capture key the rule's args can produce, walking subcommands too.
 ///
-/// Mirrors the matcher's naming: named captures (`{name:template}`) and
-/// contract refs (`{contract}`) capture under their name; unnamed builtins
-/// (`{string}`, `{int}`, `{any}`) capture positionally as `arg_N`.
+/// Mirrors the matcher's naming: named captures and contract refs capture
+/// under their name; unnamed builtins capture positionally as `arg_N`.
 fn collect_capture_keys(args: &[String], out: &mut Vec<String>) {
     for raw in args {
         let pattern = parse_arg_pattern(raw);
@@ -70,8 +69,8 @@ fn collect_capture_keys(args: &[String], out: &mut Vec<String>) {
     }
 }
 
-/// Reject file-action capture references that the rule's args can never
-/// produce. Accepts references with or without braces (`"path"` / `"{path}"`).
+/// Reject file-action capture references that the rule's args can never produce.
+/// Accepts references with or without braces (`"path"` / `"{path}"`).
 fn validate_action_captures(rule: &Rule, index: usize, scope: &str, errors: &mut Vec<String>) {
     let mut references: Vec<(&str, &str)> = match &rule.action {
         Action::ReadFile { path_capture, .. }
@@ -325,16 +324,14 @@ action = {{ type = "show_help" }}
     #[test]
     fn test_validate_rejects_unmatched_path_capture() {
         let mut tmp = NamedTempFile::new().unwrap();
-        writeln!(
-            tmp,
-            r#"
-[[rules]]
-action = {{ type = "read_file", path_capture = "{{string}}", root_set = "roots" }}
-command = "cat"
-args = ["{{string}}"]
-"#
-        )
-        .unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "{string}", root_set = "roots" }
+            command = "cat"
+            args = ["{string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
         assert!(result.is_err(), "expected Err for unmatched path_capture");
@@ -348,16 +345,14 @@ args = ["{{string}}"]
     #[test]
     fn test_validate_accepts_named_capture() {
         let mut tmp = NamedTempFile::new().unwrap();
-        writeln!(
-            tmp,
-            r#"
-[[rules]]
-action = {{ type = "read_file", path_capture = "path", root_set = "roots" }}
-command = "cat"
-args = ["{{path:string}}"]
-"#
-        )
-        .unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "path", root_set = "roots" }
+            command = "cat"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
         assert!(
@@ -369,16 +364,14 @@ args = ["{{path:string}}"]
     #[test]
     fn test_validate_accepts_braced_capture_reference() {
         let mut tmp = NamedTempFile::new().unwrap();
-        writeln!(
-            tmp,
-            r#"
-[[rules]]
-action = {{ type = "read_file", path_capture = "{{path}}", root_set = "roots" }}
-command = "cat"
-args = ["{{path:string}}"]
-"#
-        )
-        .unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "read_file", path_capture = "{path}", root_set = "roots" }
+            command = "cat"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
         assert!(
@@ -390,16 +383,14 @@ args = ["{{path:string}}"]
     #[test]
     fn test_validate_rejects_unmatched_lines_capture() {
         let mut tmp = NamedTempFile::new().unwrap();
-        writeln!(
-            tmp,
-            r#"
-[[rules]]
-action = {{ type = "tail_file", path_capture = "path", lines_capture = "n", root_set = "roots" }}
-command = "tail"
-args = ["{{path:string}}"]
-"#
-        )
-        .unwrap();
+        let value = toml::toml! {
+            [[rules]]
+            action = { type = "tail_file", path_capture = "path", lines_capture = "n", root_set = "roots" }
+            command = "tail"
+            args = ["{path:string}"]
+        };
+        let content = toml::to_string_pretty(&value).unwrap();
+        write!(tmp, "{content}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
         assert!(result.is_err(), "expected Err for unmatched lines_capture");

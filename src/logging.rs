@@ -8,10 +8,10 @@ pub fn init(tag: &str) -> Result<(), Box<dyn std::error::Error>> {
         pid: std::process::id(),
     };
 
-    // Prefer the local syslog socket, but do not treat its absence as fatal:
+    // Prefer the local syslog socket, but do not treat its absence as fatal.
     // sshd ForceCommand environments always have /dev/log, yet containers and
     // test harnesses may not. Fall back to stderr so the guard stays usable
-    // (and observable) wherever it runs.
+    // and observable wherever it runs.
     match syslog::unix(formatter.clone()) {
         Ok(logger) => {
             log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)))
@@ -30,8 +30,8 @@ pub fn init(tag: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Minimal `log::Log` sink writing to stderr — fallback when no syslog
-/// socket is reachable (containers, e2e harnesses).
+/// Minimal `log::Log` sink writing to stderr. Fallback when no syslog
+/// socket is reachable.
 struct StderrLogger {
     tag: String,
 }

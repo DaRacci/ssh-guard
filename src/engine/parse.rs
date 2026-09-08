@@ -59,8 +59,6 @@ pub(crate) fn parse_template_type(inner: &str) -> TemplateType {
 }
 
 pub(crate) fn parse_single_template(s: &str) -> TemplateType {
-    // Explicitly named capture: `{name:template}` stores the matched value
-    // under `name` (e.g. `{path:string}` -> capture "path").
     if let Some((name, rest)) = s.split_once(':')
         && is_valid_capture_name(name)
     {
@@ -77,8 +75,8 @@ pub(crate) fn parse_single_template(s: &str) -> TemplateType {
     }
 }
 
-/// A capture name must be a usable map key: starts with a letter or
-/// underscore, then letters/digits/underscores/hyphens.
+/// A capture name must be a usable map key: starts with a letter or underscore,
+/// then letters/digits/underscores/hyphens.
 fn is_valid_capture_name(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -118,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_capture_name_falls_back() {
-        // A colon after an invalid name is not a named capture - the whole
+        // A colon after an invalid name is not a named capture. The whole
         // inner string is treated as a contract ref, as before.
         let p = parse_arg_pattern("{1bad:string}");
         match p {
