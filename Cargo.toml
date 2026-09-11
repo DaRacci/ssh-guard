@@ -1,5 +1,6 @@
 [package]
 name = "ssh-guard"
+description = "Guard your SSH server with dynamic scoped rules, and audit logging."
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
