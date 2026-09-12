@@ -114,6 +114,7 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::env;
 
     #[test]
     fn test_cli_parse_run() {
@@ -285,8 +286,9 @@ mod tests {
 
     #[test]
     fn test_cli_add_rule_dispatch_errors_on_bad_config() {
+        let tempfile = env::temp_dir().join("nonexistent-ssh-guard-config.toml");
         let cmd = Command::AddRule {
-            config: Some("/tmp/nonexistent-ssh-guard-config.toml".to_string()),
+            config: Some(tempfile.to_str().unwrap().to_string()),
             cmd: "ls".to_string(),
             profile: None,
         };

@@ -55,6 +55,12 @@
               cargo-llvm-cov
               cargo-nextest
               cargo-vet
+              cargo-shear
+              cargo-mutants
+              cargo-geiger
+              cargo-udeps
+              cargo-diet
+              cargo-license
             ];
 
             languages.rust = {
