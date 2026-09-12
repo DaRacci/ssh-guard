@@ -6,7 +6,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 readme = "README.md"
 repository = "https://codeberg.org/Racci/ssh-guard"
-include = ["src/**", "tests/**", "supply-chain/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**", "tests/**", "supply-chain/**", "LICENSE"]
 categories = ["security", "network-programming", "command-line-utilities", "command-line-utilities", "config"]
 keywords = ["ssh", "audit", "guard", "privilege", "server"]
 
@@ -15,7 +15,6 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.*"
 serde_json = "1"
-toml_edit = "~0.25"
 thiserror = "2"
 shlex = "~2.0.1"
 log = "0.4"
