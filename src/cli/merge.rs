@@ -58,7 +58,7 @@ pub fn add_rule(
 /// Walk argv tokens and merge them into the rule tree.
 fn walk_and_merge(rule: &mut Rule, argv: &[String]) {
     let mut i = 0;
-    i = merge_flags(&mut rule.flags, argv, i);
+    i = merge_flags(&mut rule.flags, argv, i, &rule.arg_style);
 
     if i >= argv.len() {
         return;
@@ -68,12 +68,13 @@ fn walk_and_merge(rule: &mut Rule, argv: &[String]) {
     i += 1;
 
     let sub = find_or_create_subcommand(&mut rule.subcommands, subcmd_name);
-    i = merge_flags(&mut sub.flags, argv, i);
+    let sub_style = sub.arg_style.as_ref().unwrap_or(&rule.arg_style);
+    i = merge_flags(&mut sub.flags, argv, i, sub_style);
 
     while i < argv.len() {
         let token = &argv[i];
-        if token.starts_with('-') || token.starts_with('/') {
-            i = merge_flags(&mut sub.flags, argv, i);
+        if is_flag_like(token, sub_style) {
+            i = merge_flags(&mut sub.flags, argv, i, sub_style);
         } else {
             if !sub.args.contains(token) {
                 sub.args.push(token.clone());
@@ -83,11 +84,20 @@ fn walk_and_merge(rule: &mut Rule, argv: &[String]) {
     }
 }
 
+fn is_flag_like(token: &str, style: &ArgStyle) -> bool {
+    token.starts_with('-') || matches!(style, ArgStyle::Dos) && token.starts_with('/')
+}
+
 /// Merge flags starting at position `start` into `flags` list, returning new position.
-fn merge_flags(flags: &mut Vec<String>, argv: &[String], mut start: usize) -> usize {
+fn merge_flags(
+    flags: &mut Vec<String>,
+    argv: &[String],
+    mut start: usize,
+    style: &ArgStyle,
+) -> usize {
     while start < argv.len() {
         let token = &argv[start];
-        if !token.starts_with('-') && !token.starts_with('/') {
+        if !is_flag_like(token, style) {
             break;
         }
         if !flags.contains(token) {
@@ -96,7 +106,7 @@ fn merge_flags(flags: &mut Vec<String>, argv: &[String], mut start: usize) -> us
         start += 1;
         if start < argv.len() {
             let next = &argv[start];
-            if !next.starts_with('-') && !next.starts_with('/') {
+            if !is_flag_like(next, style) {
                 start += 1;
             }
         }
@@ -486,6 +496,34 @@ args = ["sshd.service"]
         assert_eq!(rule.subcommands[0].name, "status");
         assert!(rule.subcommands[0].flags.is_empty());
         assert!(rule.subcommands[0].args.is_empty());
+    }
+
+    #[test]
+    fn test_absolute_flag_value_not_treated_as_flag() {
+        let (_dir, path) = minimal_config();
+        add_rule(&path, "cmd --config /etc/ssh/sshd_config status", None).unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        let rule = find_rule(&config.rules, "cmd").unwrap();
+
+        assert_eq!(rule.flags, vec!["--config"]);
+        assert_eq!(rule.subcommands.len(), 1);
+        assert_eq!(rule.subcommands[0].name, "status");
+        assert!(rule.subcommands[0].flags.is_empty());
+    }
+
+    #[test]
+    fn test_absolute_subcommand_arg_not_treated_as_flag() {
+        let (_dir, path) = minimal_config();
+        add_rule(&path, "cmd status /var/log/auth.log", None).unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        let rule = find_rule(&config.rules, "cmd").unwrap();
+
+        assert_eq!(rule.subcommands.len(), 1);
+        assert_eq!(rule.subcommands[0].name, "status");
+        assert_eq!(rule.subcommands[0].args, vec!["/var/log/auth.log"]);
+        assert!(rule.subcommands[0].flags.is_empty());
     }
 
     #[test]
