@@ -135,6 +135,12 @@ fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
 
         if let Action::Run { binary, .. } = &rule.action {
             let path = std::path::Path::new(binary);
+            if !path.is_absolute() {
+                errors.push(format!(
+                    "{scope} rule[{i}]: binary '{binary}' must be an absolute path"
+                ));
+                continue;
+            }
             if !path.exists() {
                 errors.push(format!(
                     "{scope} rule[{i}]: binary '{binary}' does not exist"
@@ -224,6 +230,34 @@ implicit_symlinks = true
             msg.contains("does not exist"),
             "expected 'does not exist' in error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_relative_existing_binary() {
+        let binary = tempfile::Builder::new()
+            .prefix("relative-binary-")
+            .tempfile_in(".")
+            .unwrap();
+        std::fs::set_permissions(binary.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let relative_path = binary.path().file_name().unwrap().to_str().unwrap();
+
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[[rules]]
+action = {{ type = "run", binary = "{}", args = [] }}
+implicit_symlinks = true
+"#,
+            relative_path
+        )
+        .unwrap();
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = validate(&path);
+        assert!(result.is_err(), "expected Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be an absolute path"), "got: {msg}");
     }
 
     #[test]

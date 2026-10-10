@@ -42,11 +42,11 @@ pub fn add_rule(
             .flag_groups
             .get_or_insert_with(std::collections::HashMap::new);
 
-        let rule = find_or_create_rule(rules, binary_name);
+        let rule = find_or_create_rule(rules, binary_name)?;
         walk_and_merge(rule, &argv[1..]);
         auto_create_flag_groups_in_rules(profile_fg, rules, binary_name);
     } else {
-        let rule = find_or_create_rule(&mut config.rules, binary_name);
+        let rule = find_or_create_rule(&mut config.rules, binary_name)?;
         walk_and_merge(rule, &argv[1..]);
         auto_create_flag_groups(&mut config, binary_name);
     }
@@ -135,7 +135,10 @@ fn binary_matches_name(binary: &str, binary_name: &str) -> bool {
     }
 }
 
-fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a mut Rule {
+fn find_or_create_rule<'a>(
+    rules: &'a mut Vec<Rule>,
+    binary_name: &str,
+) -> Result<&'a mut Rule, GuardError> {
     if let Some(pos) = rules.iter().position(|r| {
         if let Action::Run { binary, .. } = &r.action {
             binary_matches_name(binary, binary_name)
@@ -143,12 +146,12 @@ fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a m
             false
         }
     }) {
-        return &mut rules[pos];
+        return Ok(&mut rules[pos]);
     }
 
     let new_rule = Rule {
         action: Action::Run {
-            binary: resolve_binary_path(binary_name),
+            binary: resolve_binary_path(binary_name)?,
             args: vec![],
             timeout: Duration::default(),
         },
@@ -163,28 +166,31 @@ fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a m
     };
     rules.push(new_rule);
     let rule_index = rules.len() - 1;
-    &mut rules[rule_index]
+    Ok(&mut rules[rule_index])
 }
 
 /// Resolve `binary_name` to an absolute path by searching `PATH`.
 ///
 /// If `binary_name` already contains a path separator it is returned as-is so explicit paths are preserved.
-/// Otherwise the first executable match on `PATH` is used, falling back to the bare name when no match is found.
-fn resolve_binary_path(binary_name: &str) -> String {
+/// Otherwise the first executable executable match on `PATH` is used.
+/// If no match is found, rule creation fails instead of writing a PATH-dependent bare name into the config.
+fn resolve_binary_path(binary_name: &str) -> Result<String, GuardError> {
     if binary_name.contains('/') {
-        return binary_name.to_string();
+        return Ok(binary_name.to_string());
     }
 
     if let Some(path_var) = env::var_os("PATH") {
         for dir in env::split_paths(&path_var) {
             let candidate = dir.join(binary_name);
             if is_executable(&candidate) {
-                return candidate.display().to_string();
+                return Ok(candidate.display().to_string());
             }
         }
     }
 
-    binary_name.to_string()
+    Err(GuardError::Config(format!(
+        "binary '{binary_name}' not found on PATH; use an explicit absolute path"
+    )))
 }
 
 /// True when `path` points to an executable regular file.
@@ -330,16 +336,23 @@ action = { type = "show_help" }
         path
     }
 
+    /// Run `f` with `PATH` pointed at a fresh temp dir holding empty executable files named in `binary_names`.
+    /// The mock dir is handed to `f` so callers can compute the path `resolve_binary_path` is expected to return.
+    fn with_mock_path<T>(binary_names: &[&str], f: impl FnOnce(&Path) -> T) -> T {
+        let dir = tempfile::tempdir().unwrap();
+        for name in binary_names {
+            write_executable(&dir, name);
+        }
+        let path_value = dir.path().to_string_lossy().to_string();
+        temp_env::with_var("PATH", Some(path_value.as_str()), || f(dir.path()))
+    }
+
     #[test]
     fn test_resolve_binary_path_finds_on_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let binary_path = write_executable(&dir, "mockcmd");
-        let path_value = dir.path().to_string_lossy().to_string();
-
-        temp_env::with_var("PATH", Some(path_value.as_str()), || {
+        with_mock_path(&["mockcmd"], |mock_dir| {
             assert_eq!(
-                resolve_binary_path("mockcmd"),
-                binary_path.display().to_string()
+                resolve_binary_path("mockcmd").unwrap(),
+                mock_dir.join("mockcmd").display().to_string()
             );
         });
     }
@@ -347,41 +360,53 @@ action = { type = "show_help" }
     #[test]
     fn test_resolve_binary_path_preserves_explicit_path() {
         assert_eq!(
-            resolve_binary_path("/opt/test/bin/env"),
+            resolve_binary_path("/opt/test/bin/env").unwrap(),
             "/opt/test/bin/env"
         );
-        assert_eq!(resolve_binary_path("./script.sh"), "./script.sh");
+        assert_eq!(resolve_binary_path("./script.sh").unwrap(), "./script.sh");
     }
 
     #[test]
-    fn test_resolve_binary_path_missing_falls_back_to_name() {
-        let name = "definitely-not-a-real-binary-xyz";
-        assert_eq!(resolve_binary_path(name), name);
+    fn test_resolve_binary_path_missing_errors() {
+        temp_env::with_var("PATH", Some(""), || {
+            let err = resolve_binary_path("definitely-not-a-real-binary-xyz").unwrap_err();
+            assert!(err.to_string().contains("not found on PATH"));
+        });
     }
 
     #[test]
     fn test_add_rule_resolves_binary_from_current_path() {
         let (_dir, path) = minimal_config();
-        let bindir = tempfile::tempdir().unwrap();
-        let binary_path = write_executable(&bindir, "journalctl");
-        let path_value = bindir.path().to_string_lossy().to_string();
 
-        temp_env::with_var("PATH", Some(path_value.as_str()), || {
+        let expected = with_mock_path(&["journalctl"], |mock_dir| {
             add_rule(&path, "journalctl --no-pager", None).unwrap();
+            mock_dir.join("journalctl").display().to_string()
         });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "journalctl").unwrap();
 
         if let Action::Run { binary, .. } = &rule.action {
-            assert_eq!(binary, &binary_path.display().to_string());
+            assert_eq!(binary, &expected);
         }
+    }
+
+    #[test]
+    fn test_add_rule_errors_when_binary_not_found_on_path() {
+        let (_dir, path) = minimal_config();
+
+        temp_env::with_var("PATH", Some(""), || {
+            let err = add_rule(&path, "definitely-not-a-real-binary-xyz --flag", None).unwrap_err();
+            assert!(err.to_string().contains("not found on PATH"));
+        });
     }
 
     #[test]
     fn test_add_first_rule() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "journalctl --no-pager -n 10", None).unwrap();
+        with_mock_path(&["journalctl"], |_| {
+            add_rule(&path, "journalctl --no-pager -n 10", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "journalctl").unwrap();
@@ -394,7 +419,9 @@ action = { type = "show_help" }
     #[test]
     fn test_add_rule_with_subcommand() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "systemctl status angrr", None).unwrap();
+        with_mock_path(&["systemctl"], |_| {
+            add_rule(&path, "systemctl status angrr", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "systemctl").unwrap();
@@ -574,7 +601,9 @@ args = ["sshd"]
     #[test]
     fn test_add_rule_no_subcommands_only_flags() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "journalctl --since yesterday --no-pager", None).unwrap();
+        with_mock_path(&["journalctl"], |_| {
+            add_rule(&path, "journalctl --since yesterday --no-pager", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "journalctl").unwrap();
@@ -588,7 +617,9 @@ args = ["sshd"]
     #[test]
     fn test_merge_flags_dedup_same_flag_twice() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "cmd --verbose --verbose", None).unwrap();
+        with_mock_path(&["cmd"], |_| {
+            add_rule(&path, "cmd --verbose --verbose", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "cmd").unwrap();
@@ -620,7 +651,9 @@ args = ["sshd.service"]
     #[test]
     fn test_flag_with_value_consumed() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "journalctl -n 10", None).unwrap();
+        with_mock_path(&["journalctl"], |_| {
+            add_rule(&path, "journalctl -n 10", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "journalctl").unwrap();
@@ -633,7 +666,9 @@ args = ["sshd.service"]
     #[test]
     fn test_flag_value_followed_by_subcommand() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "cmd --flag value status", None).unwrap();
+        with_mock_path(&["cmd"], |_| {
+            add_rule(&path, "cmd --flag value status", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "cmd").unwrap();
@@ -648,7 +683,9 @@ args = ["sshd.service"]
     #[test]
     fn test_absolute_flag_value_not_treated_as_flag() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "cmd --config /etc/ssh/sshd_config status", None).unwrap();
+        with_mock_path(&["cmd"], |_| {
+            add_rule(&path, "cmd --config /etc/ssh/sshd_config status", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "cmd").unwrap();
@@ -662,7 +699,9 @@ args = ["sshd.service"]
     #[test]
     fn test_absolute_subcommand_arg_not_treated_as_flag() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "cmd status /var/log/auth.log", None).unwrap();
+        with_mock_path(&["cmd"], |_| {
+            add_rule(&path, "cmd status /var/log/auth.log", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "cmd").unwrap();
@@ -696,7 +735,9 @@ args = ["sshd.service"]
     #[test]
     fn test_add_rule_command_only_no_params() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "git", None).unwrap();
+        with_mock_path(&["git"], |_| {
+            add_rule(&path, "git", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "git").unwrap();
@@ -709,7 +750,9 @@ args = ["sshd.service"]
     #[test]
     fn test_walk_and_merge_flag_after_subcommand() {
         let (_dir, path) = minimal_config();
-        add_rule(&path, "systemctl status --full sshd --another-flag", None).unwrap();
+        with_mock_path(&["systemctl"], |_| {
+            add_rule(&path, "systemctl status --full sshd --another-flag", None).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let rule = find_rule(&config.rules, "systemctl").unwrap();
@@ -736,7 +779,9 @@ action = { type = "show_help" }
 users = ["admin_user"]
 "#,
         );
-        add_rule(&path, "journalctl -n 10", Some("admin")).unwrap();
+        with_mock_path(&["journalctl"], |_| {
+            add_rule(&path, "journalctl -n 10", Some("admin")).unwrap();
+        });
 
         let config = Config::from_file(&path).unwrap();
         let profile = config.profiles.get("admin").unwrap();
