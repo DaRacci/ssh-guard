@@ -403,7 +403,7 @@ fn execute_read_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
-) -> Result<i32, GuardError> {
+) -> Result<(), GuardError> {
     if let Action::ReadFile {
         path_capture,
         root_set,
@@ -418,7 +418,7 @@ fn execute_read_file<S: ::std::hash::BuildHasher>(
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
         action_read_file(path, config)?;
-        Ok(0)
+        Ok(())
     } else {
         Err(GuardError::Action("expected ReadFile action".into()))
     }
@@ -428,7 +428,7 @@ fn execute_tail_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
-) -> Result<i32, GuardError> {
+) -> Result<(), GuardError> {
     if let Action::TailFile {
         path_capture,
         lines_capture,
@@ -452,7 +452,7 @@ fn execute_tail_file<S: ::std::hash::BuildHasher>(
         for line in action_tail_file(path, lines, config)? {
             print!("{line}");
         }
-        Ok(0)
+        Ok(())
     } else {
         Err(GuardError::Action("expected TailFile action".into()))
     }
@@ -462,7 +462,7 @@ fn execute_stat_path<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
-) -> Result<i32, GuardError> {
+) -> Result<(), GuardError> {
     if let Action::StatPath {
         path_capture,
         root_set,
@@ -477,7 +477,7 @@ fn execute_stat_path<S: ::std::hash::BuildHasher>(
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
         action_stat_path(path, config)?;
-        Ok(0)
+        Ok(())
     } else {
         Err(GuardError::Action("expected StatPath action".into()))
     }
@@ -487,7 +487,7 @@ fn execute_list_dir<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
-) -> Result<i32, GuardError> {
+) -> Result<(), GuardError> {
     if let Action::ListDir {
         path_capture,
         root_set,
@@ -502,15 +502,14 @@ fn execute_list_dir<S: ::std::hash::BuildHasher>(
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
         action_list_dir(path, config)?;
-        Ok(0)
+        Ok(())
     } else {
         Err(GuardError::Action("expected ListDir action".into()))
     }
 }
 
-fn execute_show_help(config: &Config) -> i32 {
+fn execute_show_help(config: &Config) {
     print!("{}", config.global.help_text);
-    0
 }
 
 /// Build the executable argv for a rule without running the binary.
@@ -533,10 +532,12 @@ pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
 
 /// Execute matched rule action.
 ///
+/// Returns the process exit code to surface to the caller.
+///
 /// # Errors
 ///
-/// Returns `GuardError` when action execution fails, required captures are
-/// missing, or the rule contains an unsupported action payload.
+/// Returns `GuardError` when action execution fails, required captures are missing,
+/// or the rule contains an unsupported action payload.
 pub fn execute<S: ::std::hash::BuildHasher>(
     config: &Config,
     rule: &Rule,
@@ -555,11 +556,14 @@ pub fn execute<S: ::std::hash::BuildHasher>(
 
     match action_tag {
         0 => execute_run(config, rule, subcommand_path, captures, user_argv),
-        1 => execute_read_file(config, &rule.action, captures),
-        2 => execute_tail_file(config, &rule.action, captures),
-        3 => execute_stat_path(config, &rule.action, captures),
-        4 => execute_list_dir(config, &rule.action, captures),
-        5 => Ok(execute_show_help(config)),
+        1 => execute_read_file(config, &rule.action, captures).map(|()| 0),
+        2 => execute_tail_file(config, &rule.action, captures).map(|()| 0),
+        3 => execute_stat_path(config, &rule.action, captures).map(|()| 0),
+        4 => execute_list_dir(config, &rule.action, captures).map(|()| 0),
+        5 => {
+            execute_show_help(config);
+            Ok(0)
+        }
         _ => Err(GuardError::Action("unknown action type".into())),
     }
 }
@@ -1731,7 +1735,7 @@ mod tests {
         captures.insert("path".into(), file_path.to_str().unwrap().to_string());
 
         let result = execute_read_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1807,7 +1811,7 @@ mod tests {
         captures.insert("path".into(), file_path.to_str().unwrap().to_string());
 
         let result = execute_tail_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1872,7 +1876,7 @@ mod tests {
         captures.insert("lines".into(), "1".into());
 
         let result = execute_tail_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1901,7 +1905,7 @@ mod tests {
         captures.insert("path".into(), file_path.to_str().unwrap().to_string());
 
         let result = execute_tail_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1938,7 +1942,7 @@ mod tests {
         captures.insert("path".into(), file_path.to_str().unwrap().to_string());
 
         let result = execute_stat_path(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2006,7 +2010,7 @@ mod tests {
         captures.insert("path".into(), dir.path().to_string_lossy().to_string());
 
         let result = execute_list_dir(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2074,7 +2078,7 @@ mod tests {
         captures.insert("path".into(), file_path.to_str().unwrap().to_string());
 
         let result = execute_read_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2098,7 +2102,7 @@ mod tests {
         captures.insert("n".into(), "2".into());
 
         let result = execute_tail_file(&config, &action, &captures);
-        assert_eq!(result.unwrap(), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2130,8 +2134,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = execute_show_help(&config);
-        assert_eq!(result, 0);
+        execute_show_help(&config);
     }
 
     // -----------------------------------------------------------------------
