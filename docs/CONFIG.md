@@ -23,7 +23,7 @@ Allowed commands:
 """
 
 [[rules]]
-action = { type = "run", binary = "/usr/bin/systemctl", args = [], timeout = "5s" }
+action = { type = "run", binary = "/path/to/systemctl", args = [], timeout = "5s" }
 implicit_symlinks = true
 
 [[rules.subcommands]]
@@ -144,7 +144,7 @@ This lets a rule pin argument structure, for example bounding `du` recursion dep
 
 ```toml
 [[rules]]
-action = { type = "run", binary = "/usr/bin/du", args = ["-d{depth:-1}"], timeout = "30s" }
+action = { type = "run", binary = "/path/to/du", args = ["-d{depth:-1}"], timeout = "30s" }
 command = "du"
 args = ["{path}"]
 ```
@@ -172,7 +172,7 @@ users = ["root", "alice"]
 help_text = "Admin commands: systemctl, journalctl"
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/usr/bin/journalctl", args = [], timeout = "5s" }
+action = { type = "run", binary = "/path/to/journalctl", args = [], timeout = "5s" }
 
 [[profiles.admin.rules.subcommands]]
 name = "-n"
@@ -206,6 +206,9 @@ ssh-guard add-rule --config /etc/ssh_guard/config.toml \
 
 The `add-rule` subcommand parses the command, finds or creates the rule for the binary, and merges the subcommands/flags.
 It writes the updated config back to the same file.
+
+If the command uses a bare binary name like `systemctl`, `add-rule` resolves it against the current host `PATH` and writes that full path into the config.
+If you later move that config to another machine, review the generated `binary` paths before relying on it.
 
 Its worth noting that this subcommand does a best effort merge, and may not always produce the most optimal config.
 It is recommended to review the config after using this command.

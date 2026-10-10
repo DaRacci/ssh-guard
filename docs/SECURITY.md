@@ -82,7 +82,7 @@ stale log as an incident rather than an inconvenience.
 ## Use absolute binary paths and verify them
 
 `run` actions execute a fixed `binary` path.
-The use of absolute paths is required (e.g. `/usr/bin/systemctl`, not `systemctl`) so a compromised `PATH` cannot redirect execution.
+The use of absolute paths is required (e.g. `/path/to/systemctl`, not `systemctl`) so a compromised `PATH` cannot redirect execution.
 The `validate` subcommand checks that the binary exists, and with `implicit_symlinks` enabled,
 symlinked binaries are canonicalized to their real path before execution, which prevents symlink-swap attacks on the binary.
 If you set `implicit_symlinks = false`, `validate` will raise an error due to the symlinked binaries.
@@ -114,6 +114,9 @@ Review the audit log regularly, a spike in denials can indicate probing or a mis
 
 The `add-rule` subcommand reads, merges, and writes the config file back.
 It is a convenience for scaffolding, not a security boundary, you should always review the resulting TOML.
+
+If the command uses a bare binary name, `add-rule` resolves it against the current host `PATH` and writes that absolute path into the config.
+That is convenient for local scaffolding, but can be wrong if the same config is copied to another machine with different binary paths.
 
 > **Note:** `add-rule` does not validate the config after writing, a misconfigured rule can break the guard.
 > Always Run `validate` after any `add-rule` operation.

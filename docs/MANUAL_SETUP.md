@@ -238,7 +238,7 @@ Allowed commands:
 """
 
 [[profiles.deploy.rules]]
-action = { type = "run", binary = "/usr/bin/systemctl", args = [], timeout = "5s" }
+action = { type = "run", binary = "/path/to/systemctl", args = [], timeout = "5s" }
 implicit_symlinks = true
 
 [[profiles.deploy.rules.subcommands]]
