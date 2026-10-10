@@ -232,4 +232,10 @@ Options:
 | `--verbose` | Enrich template labels with contract details (e.g. `<port:1024-65535>`). |
 | `--colour <auto\|always\|never>` | Colourise output. Default `auto` (on for a TTY, off when piped; honours `NO_COLOR`). |
 
+Generated help now starts with a legend, then a `Value details:` block for placeholders and constrained values:
+
+- the legend identifies commands, subcommands, fixed literals, optional flags, and placeholders
+- when colour is disabled or unsupported, optional flags fall back to bracketed forms like `[--since]` and `[-n=<int>]`, while placeholders stay angle-bracketed
+- placeholders such as `<unit>` or `<port>` get an explanation line showing enum values, integer ranges, and literal prefixes/suffixes
+
 `show_help` rules are skipped. `read_file` / `tail_file` / `stat_path` / `list_dir` rules are shown, since they are allowed inputs.

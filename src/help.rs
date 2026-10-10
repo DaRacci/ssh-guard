@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use crate::config::Config;
 use crate::config::action::Action;
@@ -115,9 +116,33 @@ fn template_label(
     paint(PALETTE.template, &label, opts.colour)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValueDetail {
+    plain_token: String,
+    display_token: String,
+    description: String,
+}
+
 #[must_use]
 pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
-    let mut lines = vec!["Allowed commands:".to_string(), String::new()];
+    let mut lines = render_legend(opts);
+    let details = collect_value_details(config, opts);
+
+    if !details.is_empty() {
+        lines.push(String::new());
+        lines.push("Value details:".to_string());
+        lines.push(String::new());
+        for detail in details {
+            lines.push(format!(
+                "  {}  {}",
+                detail.display_token, detail.description
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Allowed commands:".to_string());
+    lines.push(String::new());
 
     for rule in &config.rules {
         if matches!(rule.action, Action::ShowHelp) {
@@ -134,6 +159,40 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     lines.join("\n")
 }
 
+fn render_legend(opts: &HelpOptions) -> Vec<String> {
+    vec![
+        "Legend:".to_string(),
+        String::new(),
+        format!(
+            "  {}  top-level command",
+            paint(PALETTE.command, "command", opts.colour)
+        ),
+        format!(
+            "  {}  nested subcommand",
+            paint(PALETTE.subcommand, "subcommand", opts.colour)
+        ),
+        format!(
+            "  {}  fixed token you type exactly",
+            paint(PALETTE.literal, "literal", opts.colour)
+        ),
+        format!(
+            "  {}  optional flag",
+            wrap_optional(&paint(PALETTE.literal, "--flag", opts.colour), opts)
+        ),
+        format!(
+            "  {}  value you supply",
+            template_label(
+                &TemplateType::Named {
+                    name: "value".to_string(),
+                    inner: Box::new(TemplateType::String),
+                },
+                &HashMap::new(),
+                opts
+            )
+        ),
+    ]
+}
+
 fn render_rule(config: &Config, rule: &Rule, opts: &HelpOptions) -> String {
     let Some(command) = rule.command_name() else {
         return String::new();
@@ -142,7 +201,7 @@ fn render_rule(config: &Config, rule: &Rule, opts: &HelpOptions) -> String {
     let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
     let mut prefix_parts = vec![paint(PALETTE.command, command, opts.colour)];
 
-    let rendered_flags = render_args(&flags, &config.contracts, opts);
+    let rendered_flags = render_optional_args(&flags, &config.contracts, opts);
     if !rendered_flags.is_empty() {
         prefix_parts.push(rendered_flags);
     }
@@ -172,7 +231,7 @@ fn render_subcommand(
     let flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
     let mut parts = vec![paint(PALETTE.subcommand, &sub.name, opts.colour)];
 
-    let rendered_flags = render_args(&flags, &config.contracts, opts);
+    let rendered_flags = render_optional_args(&flags, &config.contracts, opts);
     if !rendered_flags.is_empty() {
         parts.push(rendered_flags);
     }
@@ -189,41 +248,197 @@ fn render_subcommand(
     lines.join("\n")
 }
 
+fn render_optional_args(
+    args: &[String],
+    contracts: &HashMap<String, Contract>,
+    opts: &HelpOptions,
+) -> String {
+    args.iter()
+        .map(|raw| wrap_optional(&render_raw_arg(raw, contracts, opts), opts))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn render_args(
     args: &[String],
     contracts: &HashMap<String, Contract>,
     opts: &HelpOptions,
 ) -> String {
     args.iter()
-        .map(|raw| match parse_arg_pattern(raw) {
-            ArgPattern::Literal(literal) => paint(PALETTE.literal, &literal, opts.colour),
-            ArgPattern::Template(template) => template_label(&template, contracts, opts),
-            ArgPattern::TemplateContext {
-                prefix,
-                template,
-                suffix,
-            } => {
-                let mut rendered = String::new();
-                if let Some(prefix) = prefix {
-                    rendered.push_str(&paint(PALETTE.dim, &prefix, opts.colour));
-                }
-                rendered.push_str(&template_label(&template, contracts, opts));
-                if let Some(suffix) = suffix {
-                    rendered.push_str(&paint(PALETTE.dim, &suffix, opts.colour));
-                }
-                rendered
-            }
-            ArgPattern::InlineFlag { flag, template } => {
-                let rendered_flag = paint(PALETTE.literal, &flag, opts.colour);
-                let equals = paint(PALETTE.dim, "=", opts.colour);
-                format!(
-                    "{rendered_flag}{equals}{}",
-                    template_label(&template, contracts, opts)
-                )
-            }
-        })
+        .map(|raw| render_raw_arg(raw, contracts, opts))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn render_raw_arg(raw: &str, contracts: &HashMap<String, Contract>, opts: &HelpOptions) -> String {
+    render_pattern(&parse_arg_pattern(raw), contracts, opts)
+}
+
+fn render_pattern(
+    pattern: &ArgPattern,
+    contracts: &HashMap<String, Contract>,
+    opts: &HelpOptions,
+) -> String {
+    match pattern {
+        ArgPattern::Literal(literal) => paint(PALETTE.literal, literal, opts.colour),
+        ArgPattern::Template(template) => template_label(template, contracts, opts),
+        ArgPattern::TemplateContext {
+            prefix,
+            template,
+            suffix,
+        } => {
+            let mut rendered = String::new();
+            if let Some(prefix) = prefix {
+                rendered.push_str(&paint(PALETTE.dim, prefix, opts.colour));
+            }
+            rendered.push_str(&template_label(template, contracts, opts));
+            if let Some(suffix) = suffix {
+                rendered.push_str(&paint(PALETTE.dim, suffix, opts.colour));
+            }
+            rendered
+        }
+        ArgPattern::InlineFlag { flag, template } => {
+            let rendered_flag = paint(PALETTE.literal, flag, opts.colour);
+            let equals = paint(PALETTE.dim, "=", opts.colour);
+            format!(
+                "{rendered_flag}{equals}{}",
+                template_label(template, contracts, opts)
+            )
+        }
+    }
+}
+
+fn wrap_optional(rendered: &str, opts: &HelpOptions) -> String {
+    let open = paint(PALETTE.dim, "[", opts.colour);
+    let close = paint(PALETTE.dim, "]", opts.colour);
+    format!("{open}{rendered}{close}")
+}
+
+fn collect_value_details(config: &Config, opts: &HelpOptions) -> Vec<ValueDetail> {
+    let mut details = Vec::new();
+
+    for rule in &config.rules {
+        if matches!(rule.action, Action::ShowHelp) {
+            continue;
+        }
+        let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
+        collect_details_for_tokens(&flags, true, &config.contracts, opts, &mut details);
+        collect_details_for_tokens(&rule.args, false, &config.contracts, opts, &mut details);
+        for sub in &rule.subcommands {
+            collect_subcommand_value_details(config, sub, opts, &mut details);
+        }
+    }
+
+    details
+}
+
+fn collect_subcommand_value_details(
+    config: &Config,
+    sub: &Subcommand,
+    opts: &HelpOptions,
+    details: &mut Vec<ValueDetail>,
+) {
+    let flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
+    collect_details_for_tokens(&flags, true, &config.contracts, opts, details);
+    collect_details_for_tokens(&sub.args, false, &config.contracts, opts, details);
+
+    for nested in &sub.subcommands {
+        collect_subcommand_value_details(config, nested, opts, details);
+    }
+}
+
+fn collect_details_for_tokens(
+    raw_tokens: &[String],
+    optional: bool,
+    contracts: &HashMap<String, Contract>,
+    opts: &HelpOptions,
+    details: &mut Vec<ValueDetail>,
+) {
+    let plain_opts = HelpOptions {
+        tree: opts.tree,
+        verbose: opts.verbose,
+        colour: false,
+    };
+
+    for raw in raw_tokens {
+        let pattern = parse_arg_pattern(raw);
+        let description = detail_description(&pattern, contracts);
+        if let Some(description) = description {
+            let plain_token = if optional {
+                wrap_optional(
+                    &render_pattern(&pattern, contracts, &plain_opts),
+                    &plain_opts,
+                )
+            } else {
+                render_pattern(&pattern, contracts, &plain_opts)
+            };
+            if details.iter().any(|detail| {
+                detail.plain_token == plain_token && detail.description == description
+            }) {
+                continue;
+            }
+
+            let display_token = if optional {
+                wrap_optional(&render_pattern(&pattern, contracts, opts), opts)
+            } else {
+                render_pattern(&pattern, contracts, opts)
+            };
+            details.push(ValueDetail {
+                plain_token,
+                display_token,
+                description,
+            });
+        }
+    }
+}
+
+fn detail_description(
+    pattern: &ArgPattern,
+    contracts: &HashMap<String, Contract>,
+) -> Option<String> {
+    match pattern {
+        ArgPattern::Literal(_) => None,
+        ArgPattern::Template(template) | ArgPattern::InlineFlag { template, .. } => {
+            Some(describe_template(template, contracts))
+        }
+        ArgPattern::TemplateContext {
+            prefix,
+            template,
+            suffix,
+        } => {
+            let mut desc = describe_template(template, contracts);
+            if let Some(prefix) = prefix {
+                let _ = write!(desc, "; literal prefix '{prefix}'");
+            }
+            if let Some(suffix) = suffix {
+                let _ = write!(desc, "; literal suffix '{suffix}'");
+            }
+            Some(desc)
+        }
+    }
+}
+
+fn describe_template(template: &TemplateType, contracts: &HashMap<String, Contract>) -> String {
+    match template {
+        TemplateType::String => "text value".to_string(),
+        TemplateType::Int => "integer".to_string(),
+        TemplateType::Any => "any value".to_string(),
+        TemplateType::ContractRef(name) => match contracts.get(name) {
+            Some(Contract::IntRange { min, max }) => format!("integer {min}..{max}"),
+            Some(Contract::StringLen { min, max }) => format!("text {min}..{max} chars"),
+            Some(Contract::Enum { values }) => format!("one of: {}", values.join(" | ")),
+            None => format!("value matching contract '{name}'"),
+        },
+        TemplateType::Named { inner, .. } => describe_template(inner, contracts),
+        TemplateType::Union(types) => format!(
+            "one of: {}",
+            types
+                .iter()
+                .map(|part| describe_template(part, contracts))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +502,24 @@ mod tests {
             flag_groups: vec![],
             flags: vec![],
             args,
+            pre_args: vec![],
+            subcommands: vec![],
+        }
+    }
+
+    fn run_rule_with_flags(command: &str, flags: Vec<String>) -> Rule {
+        Rule {
+            action: Action::Run {
+                binary: format!("/opt/test/bin/{command}"),
+                args: vec![],
+                timeout: crate::config::duration::Duration::default(),
+            },
+            command: Some(command.to_string()),
+            implicit_symlinks: true,
+            arg_style: ArgStyle::GnuLong,
+            flag_groups: vec![],
+            flags,
+            args: vec![],
             pre_args: vec![],
             subcommands: vec![],
         }
@@ -543,6 +776,119 @@ mod tests {
         let config = Config::default();
         let out = render_help(&config, &HelpOptions::default());
         assert!(out.contains("Allowed commands"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_includes_legend_and_value_details() {
+        let config = Config {
+            rules: vec![
+                run_rule(
+                    "systemctl",
+                    vec![
+                        sub("status", vec!["{unit}.service".into()]),
+                        sub("show", vec!["{unit}".into()]),
+                    ],
+                    vec![],
+                ),
+                run_rule_with_flags(
+                    "journalctl",
+                    vec!["--since".into(), "-n={int}".into(), "--no-pager".into()],
+                ),
+            ],
+            contracts: contracts(),
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &HelpOptions::default());
+        let legend_idx = out.find("Legend:").expect("legend missing");
+        let commands_idx = out
+            .find("Allowed commands:")
+            .expect("allowed commands heading missing");
+
+        assert!(legend_idx < commands_idx, "got: {out}");
+        assert!(out.contains("Value details:"), "got: {out}");
+        assert!(out.contains("<unit>.service"), "got: {out}");
+        assert!(out.contains("one of: sshd | nginx"), "got: {out}");
+        assert!(out.contains("literal suffix '.service'"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_brackets_optional_flags_when_not_coloured() {
+        let config = Config {
+            rules: vec![run_rule_with_flags(
+                "journalctl",
+                vec!["--since".into(), "-n={int}".into(), "--no-pager".into()],
+            )],
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(
+            out.contains("journalctl [--since] [-n=<int>] [--no-pager]"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_colour_legend_uses_painted_examples() {
+        let config = Config {
+            rules: vec![run_rule(
+                "systemctl",
+                vec![sub("status", vec!["{unit}".into()])],
+                vec![],
+            )],
+            ..Default::default()
+        };
+
+        let out = render_help(
+            &config,
+            &HelpOptions {
+                tree: false,
+                verbose: false,
+                colour: true,
+            },
+        );
+
+        assert!(out.contains("Legend:"), "got: {out}");
+        assert!(
+            out.contains("\x1b[1mcommand\x1b[0m") || out.contains("\x1b[1msystemctl\x1b[0m"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("\x1b[34m<value>\x1b[0m") || out.contains("\x1b[34m<unit>\x1b[0m"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_value_details_include_top_level_flag_groups() {
+        let mut flag_groups = HashMap::new();
+        flag_groups.insert("service-flags".into(), vec!["--port={port}".into()]);
+
+        let config = Config {
+            rules: vec![Rule {
+                action: Action::Run {
+                    binary: "/opt/test/bin/journalctl".into(),
+                    args: vec![],
+                    timeout: crate::config::duration::Duration::default(),
+                },
+                command: Some("journalctl".into()),
+                implicit_symlinks: true,
+                arg_style: ArgStyle::GnuLong,
+                flag_groups: vec!["service-flags".into()],
+                flags: vec![],
+                args: vec![],
+                pre_args: vec![],
+                subcommands: vec![],
+            }],
+            contracts: contracts(),
+            flag_groups,
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(out.contains("[--port=<port>]"), "got: {out}");
+        assert!(out.contains("integer 1024..65535"), "got: {out}");
     }
 
     #[test]
