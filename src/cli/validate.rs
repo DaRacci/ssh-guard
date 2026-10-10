@@ -170,21 +170,32 @@ fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
 mod tests {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     use tempfile::NamedTempFile;
 
     use super::validate;
 
+    fn write_executable(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     #[test]
     fn test_validate_valid_config_with_existing_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = write_executable(&dir, "valid-binary");
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
-"#
+"#,
+            binary.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
@@ -217,49 +228,49 @@ implicit_symlinks = true
 
     #[test]
     fn test_validate_symlink_with_implicit_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = write_executable(&dir, "real-binary");
+        let link = dir.path().join("linked-binary");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = false
-"#
+"#,
+            link.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         let result = validate(&path);
-
-        // /bin/sh is a symlink on NixOS, so we expect symlink error
-        // On other systems it may be a real file; handle gracefully
-        match result {
-            Ok(()) => {
-                // Not a symlink on this system
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("symlink"),
-                    "expected 'symlink' in error, got: {msg}"
-                );
-            }
-        }
+        assert!(result.is_err(), "expected symlink validation error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("symlink"),
+            "expected 'symlink' in error, got: {msg}"
+        );
     }
 
     #[test]
     fn test_validate_multiple_rules_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = write_executable(&dir, "valid-binary");
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
 
 [[rules]]
 action = {{ type = "run", binary = "/does/not/exist", args = [] }}
 implicit_symlinks = true
-"#
+"#,
+            binary.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
@@ -295,12 +306,14 @@ action = {{ type = "show_help" }}
 
     #[test]
     fn test_validate_all_rule_types_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = write_executable(&dir, "valid-binary");
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
 
 [[rules]]
@@ -309,7 +322,8 @@ args = ["{{file:string}}"]
 
 [[rules]]
 action = {{ type = "show_help" }}
-"#
+"#,
+            binary.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
@@ -574,12 +588,14 @@ audit_log = "/dev/null"
 
     #[test]
     fn test_validate_profile_rules_missing_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = write_executable(&dir, "valid-binary");
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
 
 [profiles.admin]
@@ -588,7 +604,8 @@ users = ["admin_user"]
 [[profiles.admin.rules]]
 action = {{ type = "run", binary = "/nonexistent/profile/bin", args = [] }}
 implicit_symlinks = true
-"#
+"#,
+            binary.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
@@ -630,6 +647,8 @@ users = ["bob", "charlie"]
 
     #[test]
     fn test_validate_valid_profile_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = write_executable(&dir, "valid-binary");
         let mut tmp = NamedTempFile::new().unwrap();
         writeln!(
             tmp,
@@ -641,9 +660,10 @@ action = {{ type = "show_help" }}
 users = ["admin_user"]
 
 [[profiles.admin.rules]]
-action = {{ type = "run", binary = "/bin/sh", args = [] }}
+action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
-"#
+"#,
+            binary.display()
         )
         .unwrap();
         let path = tmp.path().to_str().unwrap().to_string();

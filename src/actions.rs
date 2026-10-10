@@ -613,7 +613,7 @@ mod tests {
     fn make_systemctl_rule() -> Rule {
         Rule {
             action: Action::Run {
-                binary: "/run/current-system/sw/bin/systemctl".into(),
+                binary: "/opt/test/bin/systemctl".into(),
                 args: vec!["--no-pager".into()],
                 timeout: Duration { millis: 5000 },
             },
@@ -650,7 +650,7 @@ mod tests {
     fn make_simple_rule() -> Rule {
         Rule {
             action: Action::Run {
-                binary: "/bin/journalctl".into(),
+                binary: "/opt/test/bin/journalctl".into(),
                 args: vec!["--no-pager".into()],
                 timeout: Duration { millis: 5000 },
             },
@@ -761,7 +761,7 @@ mod tests {
     fn test_build_command_nested_subcommands() {
         let rule = Rule {
             action: Action::Run {
-                binary: "/bin/git".into(),
+                binary: "/opt/test/bin/git".into(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },
@@ -862,7 +862,7 @@ mod tests {
         // Action-level args are prepended before subcommand name + pre_args
         let rule = Rule {
             action: Action::Run {
-                binary: "/bin/cmd".to_string(),
+                binary: "/opt/test/bin/cmd".to_string(),
                 args: vec!["--binary-flag".to_string()],
                 timeout: Duration { millis: 5000 },
             },
@@ -902,7 +902,7 @@ mod tests {
         // All subcommand pre_args collected across nesting levels
         let rule = Rule {
             action: Action::Run {
-                binary: "/bin/git".to_string(),
+                binary: "/opt/test/bin/git".to_string(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },
@@ -971,7 +971,7 @@ mod tests {
         // Non-command, non-subcommand tokens pass through verbatim
         let rule = Rule {
             action: Action::Run {
-                binary: "/bin/cmd".to_string(),
+                binary: "/opt/test/bin/cmd".to_string(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },
@@ -1073,7 +1073,7 @@ mod tests {
         // Empty action args, only subcommand name + pre_args injected
         let rule = Rule {
             action: Action::Run {
-                binary: "/bin/cmd".to_string(),
+                binary: "/opt/test/bin/cmd".to_string(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },

@@ -30,7 +30,7 @@ arg_style = "gnu_long"
 
 [rules.action]
 type = "run"
-binary = "/run/current-system/sw/bin/systemctl"
+binary = "/opt/test/bin/systemctl"
 args = []
 timeout = "5000ms"
 
@@ -53,7 +53,7 @@ flags = [
 
 [rules.action]
 type = "run"
-binary = "/run/current-system/sw/bin/journalctl"
+binary = "/opt/test/bin/journalctl"
 args = []
 timeout = "5000ms"
 
@@ -76,7 +76,7 @@ arg_style = "gnu_long"
 
 [profiles.admin.rules.action]
 type = "run"
-binary = "/run/current-system/sw/bin/ss"
+binary = "/opt/test/bin/ss"
 args = []
 timeout = "5000ms"
 

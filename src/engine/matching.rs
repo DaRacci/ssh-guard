@@ -518,7 +518,7 @@ mod tests {
                 // Rule 0 - git
                 Rule {
                     action: Action::Run {
-                        binary: "/run/current-system/sw/bin/git".into(),
+                        binary: "/opt/test/bin/git".into(),
                         args: vec![],
                         timeout: Duration { millis: 5000 },
                     },
@@ -613,7 +613,7 @@ mod tests {
         let mut cfg = make_config();
         cfg.rules[1] = Rule {
             action: Action::Run {
-                binary: "/bin/cat".into(),
+                binary: "/opt/test/bin/cat".into(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },
@@ -638,7 +638,7 @@ mod tests {
         let mut cfg = make_config();
         cfg.rules[1] = Rule {
             action: Action::Run {
-                binary: "/bin/tail".into(),
+                binary: "/opt/test/bin/tail".into(),
                 args: vec![],
                 timeout: Duration { millis: 5000 },
             },

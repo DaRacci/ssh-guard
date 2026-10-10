@@ -32,7 +32,7 @@ fn test_full_config_round_trip_via_file() {
         rules: vec![
             Rule {
                 action: Action::Run {
-                    binary: "/usr/bin/systemctl".into(),
+                    binary: "/opt/test/bin/systemctl".into(),
                     args: vec!["--system".into()],
                     timeout: config::duration::Duration { millis: 10000 },
                 },
@@ -107,7 +107,7 @@ fn test_full_config_round_trip_via_toml_string() {
     let cfg = config::Config {
         rules: vec![Rule {
             action: Action::Run {
-                binary: "/bin/echo".into(),
+                binary: "/opt/test/bin/echo".into(),
                 args: vec!["-n".into()],
                 timeout: config::duration::Duration { millis: 3000 },
             },
@@ -130,7 +130,7 @@ fn test_full_config_round_trip_via_toml_string() {
     let r = &loaded.rules[0];
     assert_eq!(r.arg_style, ArgStyle::PosixShort);
     assert!(!r.implicit_symlinks);
-    assert!(matches!(&r.action, Action::Run { binary, .. } if binary == "/bin/echo"));
+    assert!(matches!(&r.action, Action::Run { binary, .. } if binary == "/opt/test/bin/echo"));
 }
 
 #[test]
@@ -144,7 +144,7 @@ log_tag = "my-ssh-guard"
 sys-common = ["--no-pager"]
 
 [[rules]]
-action = { type = "run", binary = "/bin/systemctl", args = ["--no-pager"] }
+action = { type = "run", binary = "/opt/test/bin/systemctl", args = ["--no-pager"] }
 implicit_symlinks = true
 arg_style = "gnu_long"
 flag_groups = ["sys-common"]
@@ -171,7 +171,7 @@ type = "enum"
 values = ["angrr", "nix-gc"]
 
 [[rules]]
-action = { type = "run", binary = "/bin/systemctl", args = [] }
+action = { type = "run", binary = "/opt/test/bin/systemctl", args = [] }
 command = "systemctl"
 implicit_symlinks = true
 
@@ -241,7 +241,7 @@ command = "test"
 fn test_nested_subcommands_deep_config() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/cmd", args = [] }
+action = { type = "run", binary = "/opt/test/opt/test/bin/cmd", args = [] }
 implicit_symlinks = true
 
 [[rules.subcommands]]
@@ -281,7 +281,7 @@ common = ["--no-pager", "--full"]
 debug = ["--verbose"]
 
 [[rules]]
-action = { type = "run", binary = "/bin/a", args = [] }
+action = { type = "run", binary = "/opt/test/bin/a", args = [] }
 flag_groups = ["common"]
 flags = ["--extra"]
 
@@ -290,7 +290,7 @@ name = "status"
 flag_groups = ["debug"]
 
 [[rules]]
-action = { type = "run", binary = "/bin/b", args = [] }
+action = { type = "run", binary = "/opt/test/bin/b", args = [] }
 flag_groups = ["common"]
 "#;
 
@@ -306,7 +306,7 @@ flag_groups = ["common"]
 fn test_arg_style_inheritance_in_config() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/cmd", args = [] }
+action = { type = "run", binary = "/opt/test/opt/test/bin/cmd", args = [] }
 arg_style = "gnu_long"
 
 [[rules.subcommands]]
@@ -336,13 +336,13 @@ flags = ["-p"]
 fn test_duration_variants_in_full_config() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/a", args = [], timeout = "1.5h" }
+action = { type = "run", binary = "/opt/test/bin/a", args = [], timeout = "1.5h" }
 
 [[rules]]
-action = { type = "run", binary = "/bin/b", args = [], timeout = "150s" }
+action = { type = "run", binary = "/opt/test/bin/b", args = [], timeout = "150s" }
 
 [[rules]]
-action = { type = "run", binary = "/bin/c", args = [], timeout = 4242 }
+action = { type = "run", binary = "/opt/test/bin/c", args = [], timeout = 4242 }
 "#;
     let cfg: config::Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.rules.len(), 3);
@@ -352,7 +352,7 @@ action = { type = "run", binary = "/bin/c", args = [], timeout = 4242 }
 fn test_duration_minutes_and_seconds() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/x", args = [], timeout = "2m" }
+action = { type = "run", binary = "/opt/test/bin/x", args = [], timeout = "2m" }
 "#;
     let cfg: config::Config = toml::from_str(toml_str).unwrap();
     match &cfg.rules[0].action {
@@ -364,7 +364,7 @@ action = { type = "run", binary = "/bin/x", args = [], timeout = "2m" }
 
     let toml_s = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/x", args = [], timeout = "45s" }
+action = { type = "run", binary = "/opt/test/bin/x", args = [], timeout = "45s" }
 "#;
     let cfg2: config::Config = toml::from_str(toml_s).unwrap();
     match &cfg2.rules[0].action {
@@ -379,7 +379,7 @@ action = { type = "run", binary = "/bin/x", args = [], timeout = "45s" }
 fn test_invalid_config_missing_action_type() {
     let toml_str = r#"
 [[rules]]
-action = { binary = "/bin/x" }
+action = { binary = "/opt/test/bin/x" }
 "#;
     let result: Result<config::Config, _> = toml::from_str(toml_str);
     assert!(result.is_err());
@@ -389,7 +389,7 @@ action = { binary = "/bin/x" }
 fn test_invalid_config_bad_duration() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/x", args = [], timeout = "abc" }
+action = { type = "run", binary = "/opt/test/bin/x", args = [], timeout = "abc" }
 "#;
     let result: Result<config::Config, _> = toml::from_str(toml_str);
     assert!(result.is_err());
@@ -399,7 +399,7 @@ action = { type = "run", binary = "/bin/x", args = [], timeout = "abc" }
 fn test_invalid_config_unknown_action_type() {
     let toml_str = r#"
 [[rules]]
-action = { type = "do_something_weird", binary = "/bin/x" }
+action = { type = "do_something_weird", binary = "/opt/test/bin/x" }
 "#;
     let result: Result<config::Config, _> = toml::from_str(toml_str);
     assert!(result.is_err());
@@ -409,7 +409,7 @@ action = { type = "do_something_weird", binary = "/bin/x" }
 fn test_config_with_empty_subcommands_and_args() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/uptime", args = [] }
+action = { type = "run", binary = "/opt/test/bin/uptime", args = [] }
 flags = ["--pretty"]
 implicit_symlinks = true
 "#;
@@ -428,7 +428,7 @@ implicit_symlinks = true
 fn test_rule_arg_template_substitution_reaches_argv() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/du", args = ["-d{depth:-1}"], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/du", args = ["-d{depth:-1}"], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -461,7 +461,7 @@ max = 256
 fn test_rule_arg_template_missing_capture_fails_closed() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/du", args = ["-d{depth}"], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/du", args = ["-d{depth}"], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -494,7 +494,7 @@ max = 256
 fn test_contract_validated_depth_passes_through() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/du", args = [], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/du", args = [], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -545,7 +545,7 @@ fn test_issue_regression_du_du_depth() {
     // token `-d{du_depth}` to du (which rejects it as an invalid depth).
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/du", args = ["-d{du_depth:-2}"], timeout = "30s" }
+action = { type = "run", binary = "/usr/opt/test/bin/du", args = ["-d{du_depth:-2}"], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -599,7 +599,7 @@ max = 256
     // int_range) and the user token passes through to the binary.
     let toml_str_capture = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/du", args = [], timeout = "30s" }
+action = { type = "run", binary = "/usr/opt/test/bin/du", args = [], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -652,7 +652,7 @@ max = 256
 fn test_subcommand_pre_args_template_substitution() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/git", args = [], timeout = "10s" }
+action = { type = "run", binary = "/opt/test/bin/git", args = [], timeout = "10s" }
 command = "git"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -690,7 +690,7 @@ fn test_rule_level_pre_args_reach_executed_argv() {
     // were parsed and validated but silently dropped at execution time.
     let value = toml::toml! {
         [[rules]]
-        action = { type = "run", binary = "/bin/du", args = [], timeout = "30s" }
+        action = { type = "run", binary = "/opt/test/bin/du", args = [], timeout = "30s" }
         command = "du"
         implicit_symlinks = true
         arg_style = "gnu_long"
@@ -738,7 +738,7 @@ fn test_rule_level_pre_args_ordered_before_subcommand_pre_args() {
     // subcommand name.
     let value = toml::toml! {
         [[rules]]
-        action = { type = "run", binary = "/bin/git", args = ["--exec-path=/opt/git"], timeout = "10s" }
+        action = { type = "run", binary = "/opt/test/bin/git", args = ["--exec-path=/opt/git"], timeout = "10s" }
         command = "git"
         implicit_symlinks = true
         arg_style = "gnu_long"
@@ -779,7 +779,7 @@ fn test_rule_level_pre_args_template_substitution() {
     // failing closed on a missing capture with no default.
     let value = toml::toml! {
         [[rules]]
-        action = { type = "run", binary = "/bin/git", args = [], timeout = "10s" }
+        action = { type = "run", binary = "/opt/test/bin/git", args = [], timeout = "10s" }
         command = "git"
         implicit_symlinks = true
         arg_style = "gnu_long"

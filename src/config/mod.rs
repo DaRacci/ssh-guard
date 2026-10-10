@@ -277,7 +277,7 @@ action = { type = "show_help" }
     fn test_parse_subcommands() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/git", timeout = "10s" }
+action = { type = "run", binary = "/opt/test/bin/git", timeout = "10s" }
 implicit_symlinks = false
 
 [[rules.subcommands]]
@@ -350,7 +350,7 @@ help_text = "allowed: git status, git log, git remote add"
     fn test_duration_deser_inline() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/echo", args = [], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/echo", args = [], timeout = "30s" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(run_timeout(&cfg.rules[0].action), Some(30_000));
@@ -360,7 +360,7 @@ action = { type = "run", binary = "/bin/echo", args = [], timeout = "30s" }
     fn test_duration_deser_integer() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/echo", args = [], timeout = 10000 }
+action = { type = "run", binary = "/opt/test/bin/echo", args = [], timeout = 10000 }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(run_timeout(&cfg.rules[0].action), Some(10_000));
@@ -420,14 +420,14 @@ action = { type = "show_help" }
     fn test_parse_run_action_with_timeout() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/rsync", args = ["-a", "{string}"], timeout = "2m" }
+action = { type = "run", binary = "/opt/test/bin/rsync", args = ["-a", "{string}"], timeout = "2m" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 1);
         assert_eq!(
             run_parts(&cfg.rules[0].action),
             Some((
-                "/usr/bin/rsync".into(),
+                "/opt/test/bin/rsync".into(),
                 vec!["-a".into(), "{string}".into()],
                 120_000,
             ))
@@ -438,7 +438,7 @@ action = { type = "run", binary = "/usr/bin/rsync", args = ["-a", "{string}"], t
     fn test_parse_all_action_types() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/bin/echo", args = ["hello"] }
+action = { type = "run", binary = "/opt/test/bin/echo", args = ["hello"] }
 
 [[rules]]
 action = { type = "read_file", path_capture = "{log}", root_set = "logs" }
@@ -468,7 +468,7 @@ net = ["--host", "-p"]
 fmt = ["--format", "-f"]
 
 [[rules]]
-action = { type = "run", binary = "/usr/bin/curl" }
+action = { type = "run", binary = "/opt/test/bin/curl" }
 flags = ["--verbose"]
 flag_groups = ["net"]
 
@@ -492,7 +492,7 @@ flag_groups = ["fmt"]
     fn test_parse_implicit_symlinks() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/realcmd" }
+action = { type = "run", binary = "/opt/test/bin/realcmd" }
 implicit_symlinks = false
 
 [[rules]]
@@ -513,7 +513,7 @@ type = "enum"
 values = ["nginx", "sshd"]
 
 [[rules]]
-action = { type = "run", binary = "/usr/bin/systemctl" }
+action = { type = "run", binary = "/opt/test/bin/systemctl" }
 
 [[rules.subcommands]]
 name = "status"
@@ -531,7 +531,7 @@ args = ["{unit}.service"]
     fn test_parse_subcommand_arg_style_override() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/some-tool" }
+action = { type = "run", binary = "/opt/test/bin/some-tool" }
 arg_style = "gnu_long"
 
 [[rules.subcommands]]
@@ -573,7 +573,7 @@ arg_style = "dos"
             },
             rules: vec![Rule {
                 action: Action::Run {
-                    binary: "/bin/test".into(),
+                    binary: "/opt/test/bin/test".into(),
                     args: vec!["{arg}".into()],
                     timeout: Duration { millis: 10000 },
                 },
@@ -607,7 +607,7 @@ arg_style = "dos"
         assert_eq!(r.command, Some("test".into()));
         assert_eq!(
             run_parts(&r.action),
-            Some(("/bin/test".into(), vec!["{arg}".into()], 10_000))
+            Some(("/opt/test/bin/test".into(), vec!["{arg}".into()], 10_000))
         );
         assert_eq!(r.flag_groups, vec!["verbose"]);
         assert_eq!(r.flags, vec!["--debug"]);
@@ -656,7 +656,7 @@ action = { type = "show_help" }
             },
             rules: vec![Rule {
                 action: Action::Run {
-                    binary: "/bin/ls".into(),
+                    binary: "/opt/test/bin/ls".into(),
                     args: vec!["-la".into()],
                     timeout: Duration { millis: 5000 },
                 },
@@ -680,7 +680,7 @@ action = { type = "show_help" }
         assert_eq!(read_back.rules.len(), 1);
         assert_eq!(
             run_parts(&read_back.rules[0].action).map(|(binary, _, _)| binary),
-            Some("/bin/ls".into())
+            Some("/opt/test/bin/ls".into())
         );
 
         drop(tmp);
@@ -728,7 +728,7 @@ audit_log = "/dev/null"
 [global]
 audit_log = "/tmp/test_inline.log"
 [[rules]]
-action = { type = "run", binary = "/bin/true" }
+action = { type = "run", binary = "/opt/test/bin/true" }
 "#;
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(tmp, "{toml_content}").unwrap();
@@ -768,7 +768,7 @@ action = { type = "run", binary = "/bin/true" }
     fn test_parse_rule_with_flags_and_pre_args() {
         let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/bin/deploy", args = ["--env", "{string}"] }
+action = { type = "run", binary = "/opt/test/bin/deploy", args = ["--env", "{string}"] }
 flags = ["--dry-run", "--verbose"]
 pre_args = ["--config", "/etc/deploy.conf"]
 args = ["{string}"]
@@ -798,7 +798,7 @@ audit_log = "/admin/log"
 help_text = "admin help"
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/usr/bin/extra", args = [] }
+action = { type = "run", binary = "/opt/test/bin/extra", args = [] }
 
 [profiles.dev]
 users = ["charlie"]
@@ -856,7 +856,7 @@ users = ["alice"]
 audit_log = "/admin/log"
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/usr/bin/admintool", args = [] }
+action = { type = "run", binary = "/opt/test/bin/admintool", args = [] }
 "#,
         )
         .unwrap();
@@ -933,7 +933,7 @@ action = { type = "show_help" }
             users: vec!["bob".into()],
             rules: Some(vec![Rule {
                 action: Action::Run {
-                    binary: "/usr/bin/tool".into(),
+                    binary: "/opt/test/bin/tool".into(),
                     args: vec![],
                     timeout: Duration { millis: 5000 },
                 },

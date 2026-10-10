@@ -26,7 +26,7 @@ args = ["{string}"]
 
 [rules.action]
 type = "run"
-binary = "/usr/bin/head"
+binary = "/opt/test/bin/head"
 args = []
 timeout = "5000ms"
 
@@ -39,6 +39,6 @@ args = ["{string}"]
 
 [rules.action]
 type = "run"
-binary = "/usr/bin/df"
+binary = "/opt/test/bin/df"
 args = []
 timeout = "5000ms"

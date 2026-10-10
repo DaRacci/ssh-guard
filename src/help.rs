@@ -265,7 +265,7 @@ mod tests {
     fn run_rule(command: &str, subcommands: Vec<Subcommand>, args: Vec<String>) -> Rule {
         Rule {
             action: Action::Run {
-                binary: format!("/usr/bin/{command}"),
+                binary: format!("/opt/test/bin/{command}"),
                 args: vec![],
                 timeout: crate::config::duration::Duration::default(),
             },

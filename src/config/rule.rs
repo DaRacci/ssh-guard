@@ -83,7 +83,7 @@ mod tests {
     fn test_command_name_from_explicit() {
         let rule = Rule {
             action: Action::Run {
-                binary: "/usr/bin/git".into(),
+                binary: "/opt/test/bin/git".into(),
                 args: vec![],
                 timeout: Duration::default(),
             },
@@ -103,7 +103,7 @@ mod tests {
     fn test_command_name_from_binary() {
         let rule = Rule {
             action: Action::Run {
-                binary: "/usr/bin/systemctl".into(),
+                binary: "/opt/test/bin/systemctl".into(),
                 args: vec![],
                 timeout: Duration::default(),
             },
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_implicit_symlinks_default() {
         let toml_str = r#"
-action = { type = "run", binary = "/bin/true" }
+action = { type = "run", binary = "/opt/test/bin/true" }
 "#;
         let rule: Rule = toml::from_str(toml_str).unwrap();
         assert!(rule.implicit_symlinks);
@@ -183,7 +183,7 @@ action = { type = "run", binary = "/bin/true" }
     #[test]
     fn test_arg_style_default() {
         let toml_str = r#"
-action = { type = "run", binary = "/bin/true" }
+action = { type = "run", binary = "/opt/test/bin/true" }
 "#;
         let rule: Rule = toml::from_str(toml_str).unwrap();
         assert_eq!(rule.arg_style, ArgStyle::GnuLong);
@@ -192,7 +192,7 @@ action = { type = "run", binary = "/bin/true" }
     #[test]
     fn test_flags_and_flag_groups_default_empty() {
         let toml_str = r#"
-action = { type = "run", binary = "/bin/true" }
+action = { type = "run", binary = "/opt/test/bin/true" }
 "#;
         let rule: Rule = toml::from_str(toml_str).unwrap();
         assert!(rule.flags.is_empty());
