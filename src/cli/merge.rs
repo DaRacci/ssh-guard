@@ -114,10 +114,31 @@ fn merge_flags(
     start
 }
 
+fn binary_basename(binary_name: &str) -> &str {
+    Path::new(binary_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(binary_name)
+}
+
+fn binary_matches_name(binary: &str, binary_name: &str) -> bool {
+    if binary == binary_name {
+        return true;
+    }
+
+    match (
+        Path::new(binary).file_name(),
+        Path::new(binary_name).file_name(),
+    ) {
+        (Some(existing), Some(requested)) => existing == requested,
+        _ => false,
+    }
+}
+
 fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a mut Rule {
     if let Some(pos) = rules.iter().position(|r| {
         if let Action::Run { binary, .. } = &r.action {
-            binary.ends_with(&format!("/{binary_name}")) || binary == binary_name
+            binary_matches_name(binary, binary_name)
         } else {
             false
         }
@@ -205,7 +226,7 @@ fn auto_create_flag_groups_in_rules(
         .enumerate()
         .filter(|(_, r)| {
             if let Action::Run { binary, .. } = &r.action {
-                binary.ends_with(&format!("/{binary_name}")) || binary == binary_name
+                binary_matches_name(binary, binary_name)
             } else {
                 false
             }
@@ -243,7 +264,7 @@ fn auto_create_flag_groups_in_rules(
         return;
     }
 
-    let group_name = format!("{binary_name}-common-flags");
+    let group_name = format!("{}-common-flags", binary_basename(binary_name));
     if flag_groups.contains_key(&group_name) {
         return;
     }
@@ -290,9 +311,15 @@ action = { type = "show_help" }
         )
     }
 
+    /// Config with no rules at all, so `config.rules.len()` reflects only the
+    /// rules a test adds itself.
+    fn empty_config() -> (tempfile::TempDir, String) {
+        create_config("")
+    }
+
     fn find_rule<'a>(rules: &'a [Rule], name: &str) -> Option<&'a Rule> {
         rules.iter().find(|r| {
-            matches!(&r.action, Action::Run { binary, .. } if binary.ends_with(&format!("/{name}")) || binary == name)
+            matches!(&r.action, Action::Run { binary, .. } if binary_matches_name(binary, name))
         })
     }
 
@@ -348,8 +375,6 @@ action = { type = "show_help" }
 
         if let Action::Run { binary, .. } = &rule.action {
             assert_eq!(binary, &binary_path.display().to_string());
-        } else {
-            assert!(false, "expected run action");
         }
     }
 
@@ -420,6 +445,128 @@ args = ["sshd"]
         assert_eq!(rule.subcommands.len(), 2);
         assert_eq!(rule.subcommands[0].name, "status");
         assert_eq!(rule.subcommands[0].args, vec!["sshd"]);
+        assert_eq!(rule.subcommands[1].name, "show");
+        assert_eq!(rule.subcommands[1].args, vec!["sshd"]);
+    }
+
+    #[test]
+    fn test_binary_matches_name_compares_leaf_only() {
+        let cases: &[(&str, &str, bool)] = &[
+            // Identical strings short-circuit to a match.
+            ("systemctl", "systemctl", true),
+            ("", "", true),
+            // Bare name vs absolute path, either direction.
+            ("/opt/test/bin/systemctl", "systemctl", true),
+            ("systemctl", "/opt/test/bin/systemctl", true),
+            // Same leaf in different directories.
+            ("/opt/test/bin/systemctl", "/usr/local/bin/systemctl", true),
+            // Separator/component noise is normalized away.
+            ("//opt//test//bin/systemctl", "systemctl", true),
+            ("/opt/test/bin//systemctl", "/usr/local/bin/systemctl", true),
+            ("/opt/test/bin/./systemctl", "systemctl", true),
+            ("systemctl/", "systemctl", true),
+            ("/opt/test/bin/systemctl/", "systemctl", true),
+            ("./systemctl", "systemctl", true),
+            ("bin/systemctl", "systemctl", true),
+            // Different leaves never match.
+            ("systemctl", "journalctl", false),
+            ("/opt/test/bin/systemctl", "/opt/test/bin/journalctl", false),
+            // Case-sensitive.
+            ("systemctl", "Systemctl", false),
+            ("/opt/test/bin/Systemctl", "/opt/test/bin/systemctl", false),
+            // Leaf is a directory, not the requested name.
+            ("/opt/test/bin/", "systemctl", false),
+            ("/opt/test/bin/.", "systemctl", false),
+            // No leaf component at all.
+            ("/", "systemctl", false),
+            ("..", "systemctl", false),
+            ("/opt/test/bin/..", "systemctl", false),
+            // Missing leaf on only one side is not a match.
+            ("systemctl", "", false),
+            ("", "systemctl", false),
+        ];
+
+        for (binary, requested, expected) in cases {
+            assert_eq!(
+                binary_matches_name(binary, requested),
+                *expected,
+                "binary_matches_name({binary:?}, {requested:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_binary_basename_extracts_leaf_with_fallback() {
+        assert_eq!(binary_basename("/opt/test/bin/systemctl"), "systemctl");
+        assert_eq!(binary_basename("systemctl"), "systemctl");
+        assert_eq!(binary_basename("./systemctl"), "systemctl");
+        assert_eq!(binary_basename("/opt/test/bin/systemctl/"), "systemctl");
+        // No leaf component: fall back to the input verbatim.
+        assert_eq!(binary_basename("/"), "/");
+        assert_eq!(binary_basename(".."), "..");
+        assert_eq!(binary_basename(""), "");
+    }
+
+    #[test]
+    fn test_add_rule_merges_same_basename_across_different_dirs() {
+        let (_dir, path) = empty_config();
+        add_rule(&path, "/opt/test/bin/systemctl status sshd", None).unwrap();
+        add_rule(&path, "/usr/local/bin/systemctl show sshd", None).unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        assert_eq!(
+            config.rules.len(),
+            1,
+            "same basename in different dirs must reuse one rule"
+        );
+
+        let rule = find_rule(&config.rules, "systemctl").unwrap();
+        assert_eq!(rule.subcommands.len(), 2);
+        assert_eq!(rule.subcommands[0].name, "status");
+        assert_eq!(rule.subcommands[1].name, "show");
+
+        // The first registered binary path wins; later adds merge into it.
+        if let Action::Run { binary, .. } = &rule.action {
+            assert_eq!(binary, "/opt/test/bin/systemctl");
+        }
+    }
+
+    #[test]
+    fn test_add_rule_keeps_distinct_basenames_separate() {
+        let (_dir, path) = empty_config();
+        add_rule(&path, "/opt/test/bin/systemctl status sshd", None).unwrap();
+        add_rule(&path, "/opt/test/bin/journalctl -n 10", None).unwrap();
+        add_rule(&path, "/usr/local/bin/systemctl show sshd", None).unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        assert_eq!(
+            config.rules.len(),
+            2,
+            "distinct basenames stay separate; same basename merges"
+        );
+        assert!(find_rule(&config.rules, "systemctl").is_some());
+        assert!(find_rule(&config.rules, "journalctl").is_some());
+    }
+
+    #[test]
+    fn test_add_rule_bare_name_merges_into_explicit_path_rule() {
+        let (_dir, path) = create_config(
+            r#"
+[[rules]]
+action = { type = "run", binary = "/opt/test/bin/systemctl" }
+
+[[rules.subcommands]]
+name = "status"
+args = ["sshd"]
+"#,
+        );
+        add_rule(&path, "systemctl show sshd", None).unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        assert_eq!(config.rules.len(), 1);
+
+        let rule = find_rule(&config.rules, "systemctl").unwrap();
+        assert_eq!(rule.subcommands.len(), 2);
         assert_eq!(rule.subcommands[1].name, "show");
         assert_eq!(rule.subcommands[1].args, vec!["sshd"]);
     }
@@ -658,5 +805,48 @@ flags = ["--no-pager", "--since", "--full"]
         );
         // Base rules unchanged
         assert_eq!(config.rules.len(), 1);
+    }
+
+    #[test]
+    fn test_explicit_binary_path_preserves_profile_flag_grouping_by_basename() {
+        let (_dir, path) = create_config(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["admin_user"]
+
+[[profiles.admin.rules]]
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
+flags = ["--no-pager", "--since"]
+
+[[profiles.admin.rules]]
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
+flags = ["--no-pager", "--since", "-n"]
+
+[[profiles.admin.rules]]
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
+flags = ["--no-pager", "--since", "--full"]
+"#,
+        );
+        add_rule(
+            &path,
+            "/usr/local/bin/journalctl --since yesterday --no-pager",
+            Some("admin"),
+        )
+        .unwrap();
+
+        let config = Config::from_file(&path).unwrap();
+        let profile = config.profiles.get("admin").unwrap();
+        let rules = profile.rules.as_ref().unwrap();
+
+        assert_eq!(rules.len(), 3);
+        assert!(
+            profile
+                .flag_groups
+                .as_ref()
+                .is_some_and(|groups| groups.contains_key("journalctl-common-flags"))
+        );
     }
 }
