@@ -572,29 +572,41 @@ pub fn execute<S: ::std::hash::BuildHasher>(
 mod tests {
     use crate::config::arg::ArgStyle;
     use crate::config::global::Global;
+    use nix::sys::stat::Mode;
     use std::collections::HashMap;
     use std::fmt::Write as _;
-    use std::fs::{File, Permissions, create_dir, rename, set_permissions, write};
-    use std::io::Write;
+    use std::fs::{create_dir, write};
     use std::path::PathBuf;
 
     use super::*;
 
-    fn write_executable_script(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
+    // =====================================================================
+    // Self-exec subprocess fixtures
+    // =====================================================================
+    // The `action_run` tests need a child process that exits 0, and outlives a 1ms timeout.
+    // Doing this without depending on host tools and without writing + exec'ing a throwaway temp.
+    //
+    // So we execute the test harness binary itself and pass `--exact <test path>` so the child runs exactly one of the `subprocess_helper_*` tests below, then exits:
+    //   - `subprocess_helper_success` -> exits 0 immediately
+    //   - `subprocess_helper_sleep`   -> sleeps 100ms
 
-        let bin_path = dir.path().join(name);
-        let temp_path = dir.path().join(format!(".{name}.tmp"));
-        let mut file = File::create(&temp_path).unwrap();
+    /// Path to the compiled test-harness binary.
+    fn test_binary_path() -> PathBuf {
+        std::env::current_exe().unwrap()
+    }
 
-        file.write_all(body.as_bytes()).unwrap();
-        file.sync_all().unwrap();
-        drop(file);
+    fn test_binary_args(test_name: &str) -> Vec<String> {
+        vec!["--exact".into(), test_name.into()]
+    }
 
-        set_permissions(&temp_path, Permissions::from_mode(0o755)).unwrap();
-        rename(&temp_path, &bin_path).unwrap();
+    /// Re-exec target that exits 0 immediately.
+    #[test]
+    fn subprocess_helper_success() {}
 
-        bin_path
+    /// Re-exec target that stays alive long enough for a 1ms timeout to fire.
+    #[test]
+    fn subprocess_helper_sleep() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     /// File content with `count` numbered lines, each newline-terminated.
@@ -1150,7 +1162,7 @@ mod tests {
         // Use a temp file (not a symlink) with implicit_symlinks=true
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("mybinary");
-        write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        write(&bin_path, "").unwrap();
         let result = resolve_binary(bin_path.to_str().unwrap(), true).unwrap();
         // canonicalize resolves, so result should be an absolute path
         assert!(result.contains("mybinary"));
@@ -1160,7 +1172,7 @@ mod tests {
     fn test_resolve_binary_implicit_symlinks_false_not_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("mybinary");
-        write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        write(&bin_path, "").unwrap();
         let result = resolve_binary(bin_path.to_str().unwrap(), false).unwrap();
         assert_eq!(result, bin_path.to_str().unwrap());
     }
@@ -1239,10 +1251,9 @@ mod tests {
 
     #[test]
     fn test_action_run_success() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
-
-        let argv: Vec<String> = vec![];
+        // Child = this test binary re-exec'd to run `subprocess_helper_success`.
+        let bin_path = test_binary_path();
+        let argv = test_binary_args("actions::tests::subprocess_helper_success");
         let result = action_run(
             bin_path.to_str().unwrap(),
             &argv,
@@ -1254,13 +1265,10 @@ mod tests {
 
     #[test]
     fn test_action_run_timeout() {
-        // Write to temp path, close it, then rename into place.
-        // Avoids ETXTBSY in nix/overlay-style sandboxes when exec happens
-        // immediately after script creation.
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = write_executable_script(&dir, "sleeper", "#!/bin/sh\nsleep 10\n");
-
-        let argv: Vec<String> = vec![];
+        // Child = this test binary re-exec'd to run `subprocess_helper_sleep`,
+        // which stays alive past the 1ms timeout below.
+        let bin_path = test_binary_path();
+        let argv = test_binary_args("actions::tests::subprocess_helper_sleep");
         let result = action_run(
             bin_path.to_str().unwrap(),
             &argv,
@@ -1575,14 +1583,7 @@ mod tests {
     fn test_action_stat_path_other_fifo() {
         let dir = tempfile::tempdir().unwrap();
         let fifo_path = dir.path().join("test_fifo");
-        let status_result = std::process::Command::new("mkfifo")
-            .arg(&fifo_path)
-            .status();
-        assert!(status_result.is_ok(), "mkfifo should be available");
-        let Ok(status) = status_result else {
-            return;
-        };
-        assert!(status.success(), "mkfifo failed");
+        nix::unistd::mkfifo(&fifo_path, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1669,17 +1670,17 @@ mod tests {
 
     #[test]
     fn test_execute_run_with_run_action() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
+        // Child = this test binary re-exec'd to run `subprocess_helper_success`.
+        let bin_path = test_binary_path();
 
         let config = Config::default();
         let rule = Rule {
             action: Action::Run {
                 binary: bin_path.to_str().unwrap().into(),
-                args: vec![],
+                args: test_binary_args("actions::tests::subprocess_helper_success"),
                 timeout: Duration { millis: 5000 },
             },
-            command: Some("true".into()),
+            command: None,
             implicit_symlinks: true,
             arg_style: ArgStyle::GnuLong,
             flag_groups: vec![],
@@ -2143,17 +2144,17 @@ mod tests {
 
     #[test]
     fn test_execute_dispatches_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = write_executable_script(&dir, "true_script", "#!/bin/sh\nexit 0\n");
+        // Child = this test binary re-exec'd to run `subprocess_helper_success`.
+        let bin_path = test_binary_path();
 
         let config = Config::default();
         let rule = Rule {
             action: Action::Run {
                 binary: bin_path.to_str().unwrap().into(),
-                args: vec![],
+                args: test_binary_args("actions::tests::subprocess_helper_success"),
                 timeout: Duration { millis: 5000 },
             },
-            command: Some("true".into()),
+            command: None,
             implicit_symlinks: true,
             arg_style: ArgStyle::GnuLong,
             flag_groups: vec![],

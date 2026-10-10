@@ -429,7 +429,7 @@ action = {{ type = "show_help" }}
     fn test_validate_symlink_to_real_target_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
         let target_path = dir.path().join("real_binary");
-        std::fs::write(&target_path, "#!/bin/sh\necho hi").unwrap();
+        std::fs::write(&target_path, "").unwrap();
         std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let link_path = dir.path().join("symlink_binary");
@@ -493,7 +493,7 @@ implicit_symlinks = false
     fn test_validate_symlink_with_implicit_enabled() {
         let dir = tempfile::tempdir().unwrap();
         let target_path = dir.path().join("real_binary");
-        std::fs::write(&target_path, "#!/bin/sh\necho hi").unwrap();
+        std::fs::write(&target_path, "").unwrap();
         std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let link_path = dir.path().join("symlink_binary");
@@ -523,7 +523,7 @@ implicit_symlinks = true
         let dir = tempfile::tempdir().unwrap();
 
         let target_path = dir.path().join("level_40");
-        std::fs::write(&target_path, "#!/bin/sh\necho hi").unwrap();
+        std::fs::write(&target_path, "").unwrap();
         std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let max_links = 38usize;

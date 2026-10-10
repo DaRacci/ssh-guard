@@ -241,7 +241,7 @@ command = "test"
 fn test_nested_subcommands_deep_config() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/opt/test/opt/test/bin/cmd", args = [] }
+action = { type = "run", binary = "/opt/test/bin/cmd", args = [] }
 implicit_symlinks = true
 
 [[rules.subcommands]]
@@ -306,7 +306,7 @@ flag_groups = ["common"]
 fn test_arg_style_inheritance_in_config() {
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/opt/test/opt/test/bin/cmd", args = [] }
+action = { type = "run", binary = "/opt/test/bin/cmd", args = [] }
 arg_style = "gnu_long"
 
 [[rules.subcommands]]
@@ -545,7 +545,7 @@ fn test_issue_regression_du_du_depth() {
     // token `-d{du_depth}` to du (which rejects it as an invalid depth).
     let toml_str = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/opt/test/bin/du", args = ["-d{du_depth:-2}"], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/du", args = ["-d{du_depth:-2}"], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"
@@ -599,7 +599,7 @@ max = 256
     // int_range) and the user token passes through to the binary.
     let toml_str_capture = r#"
 [[rules]]
-action = { type = "run", binary = "/usr/opt/test/bin/du", args = [], timeout = "30s" }
+action = { type = "run", binary = "/opt/test/bin/du", args = [], timeout = "30s" }
 command = "du"
 implicit_symlinks = true
 arg_style = "gnu_long"

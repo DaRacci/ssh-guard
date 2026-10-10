@@ -1,10 +1,38 @@
 use crate::{actions, audit::AuditEvent, config::Config, engine, errors::GuardError, logging};
 
+fn current_user() -> String {
+    current_os_user()
+        .or_else(|| std::env::var("USER").ok().filter(|user| !user.is_empty()))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn current_os_user() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let effective_uid = status
+        .lines()
+        .find(|line| line.starts_with("Uid:"))?
+        .split_whitespace()
+        .nth(2)?
+        .parse::<u32>()
+        .ok()?;
+
+    std::fs::read_to_string("/etc/passwd")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split(':');
+            let username = fields.next()?;
+            let _password = fields.next()?;
+            let uid = fields.next()?.parse::<u32>().ok()?;
+            (uid == effective_uid).then(|| username.to_string())
+        })
+}
+
 pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
     let cfg = Config::from_file(config_path)?;
     let config_hash = Config::sha256(config_path)?;
     let session_id = crate::audit::new_session_id();
-    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
+    let user = current_user();
 
     let effective = cfg.resolve_for_user(&user)?;
     let effective_global = effective.global.clone();

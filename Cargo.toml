@@ -20,6 +20,7 @@ shlex = "~2.0.1"
 log = "0.4"
 syslog = "~7"
 nix = { version = "0.31.3", default-features = false, features = [
+  "fs",
   "signal",
   "process",
 ] }
