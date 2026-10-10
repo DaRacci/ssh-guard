@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::fs::{File, metadata, read_dir, read_to_string, symlink_metadata};
+use std::io::BufRead;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
@@ -44,7 +46,7 @@ fn resolve_binary(binary: &str, implicit_symlinks: bool) -> Result<String, Guard
             ))),
         }
     } else {
-        let meta = std::fs::symlink_metadata(binary)?;
+        let meta = symlink_metadata(binary)?;
         if meta.file_type().is_symlink() {
             return Err(GuardError::Action(format!(
                 "binary '{binary}' is a symlink and implicit_symlinks is disabled"
@@ -250,7 +252,7 @@ fn action_read_file(path_str: &str, config: &Config) -> Result<(), GuardError> {
     let path = Path::new(path_str);
     resolve_within_roots(path, &config.roots)?;
 
-    let meta = std::fs::metadata(path)?;
+    let meta = metadata(path)?;
     if meta.len() > config.global.max_read_bytes as u64 {
         return Err(GuardError::Action(format!(
             "file '{}' is {} bytes, exceeds limit of {}",
@@ -260,40 +262,60 @@ fn action_read_file(path_str: &str, config: &Config) -> Result<(), GuardError> {
         )));
     }
 
-    let contents = std::fs::read_to_string(path)?;
+    let contents = read_to_string(path)?;
     print!("{contents}");
     Ok(())
 }
 
-fn action_tail_file(path_str: &str, lines: usize, config: &Config) -> Result<(), GuardError> {
-    let path = Path::new(path_str);
-    resolve_within_roots(path, &config.roots)?;
+/// Read up to `max_lines` lines from the tail of `path`, preserving order.
+///
+/// `lines` is clamped to `max_lines`; a count of zero yields nothing.
+fn read_tail_lines(path: &Path, lines: usize, max_lines: usize) -> Result<Vec<String>, GuardError> {
+    let file = File::open(path).map_err(|e| GuardError::Action(format!("tail failed: {e}")))?;
 
-    let lines = lines.min(config.global.max_tail_lines);
-
-    let output = std::process::Command::new("tail")
-        .arg("-n")
-        .arg(lines.to_string())
-        .arg(path_str)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| GuardError::Action(format!("cannot run tail: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GuardError::Action(format!("tail failed: {stderr}")));
+    let lines = lines.min(max_lines);
+    if lines == 0 {
+        return Ok(Vec::new());
     }
 
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    Ok(())
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = String::new();
+    let mut tail = VecDeque::with_capacity(lines);
+
+    loop {
+        buf.clear();
+        let bytes_read = reader
+            .read_line(&mut buf)
+            .map_err(|e| GuardError::Action(format!("tail failed: {e}")))?;
+        if bytes_read == 0 {
+            break;
+        }
+        if tail.len() == lines {
+            let _ = tail.pop_front();
+        }
+        tail.push_back(std::mem::take(&mut buf));
+    }
+
+    Ok(tail.into_iter().collect())
+}
+
+/// Return the last `lines` lines of `path_str`, after checking it lies within a configured root.
+/// The caller is responsible for printing them.
+fn action_tail_file(
+    path_str: &str,
+    lines: usize,
+    config: &Config,
+) -> Result<Vec<String>, GuardError> {
+    let path = Path::new(path_str);
+    resolve_within_roots(path, &config.roots)?;
+    read_tail_lines(path, lines, config.global.max_tail_lines)
 }
 
 fn action_stat_path(path_str: &str, config: &Config) -> Result<(), GuardError> {
     let path = Path::new(path_str);
     resolve_within_roots(path, &config.roots)?;
 
-    let meta = std::fs::symlink_metadata(path)?;
+    let meta = symlink_metadata(path)?;
     let file_type = meta.file_type();
     let type_str = if file_type.is_dir() {
         "directory"
@@ -315,7 +337,7 @@ fn action_list_dir(path_str: &str, config: &Config) -> Result<(), GuardError> {
     let path = Path::new(path_str);
     resolve_within_roots(path, &config.roots)?;
 
-    let mut entries: Vec<_> = std::fs::read_dir(path)
+    let mut entries: Vec<_> = read_dir(path)
         .map_err(|e| {
             GuardError::Action(format!("cannot read directory '{}': {e}", path.display()))
         })?
@@ -427,7 +449,9 @@ fn execute_tail_file<S: ::std::hash::BuildHasher>(
         if root_set != "roots" {
             return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
         }
-        action_tail_file(path, lines, config)?;
+        for line in action_tail_file(path, lines, config)? {
+            print!("{line}");
+        }
         Ok(0)
     } else {
         Err(GuardError::Action("expected TailFile action".into()))
@@ -546,6 +570,7 @@ mod tests {
     use crate::config::global::Global;
     use std::collections::HashMap;
     use std::fmt::Write as _;
+    use std::fs::{File, Permissions, create_dir, rename, set_permissions, write};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -556,16 +581,29 @@ mod tests {
 
         let bin_path = dir.path().join(name);
         let temp_path = dir.path().join(format!(".{name}.tmp"));
-        let mut file = std::fs::File::create(&temp_path).unwrap();
+        let mut file = File::create(&temp_path).unwrap();
 
         file.write_all(body.as_bytes()).unwrap();
         file.sync_all().unwrap();
         drop(file);
 
-        std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::rename(&temp_path, &bin_path).unwrap();
+        set_permissions(&temp_path, Permissions::from_mode(0o755)).unwrap();
+        rename(&temp_path, &bin_path).unwrap();
 
         bin_path
+    }
+
+    /// File content with `count` numbered lines, each newline-terminated.
+    fn numbered_lines(count: usize) -> String {
+        let mut content = String::new();
+        for i in 0..count {
+            let _ = writeln!(&mut content, "line{i}");
+        }
+        content
+    }
+
+    fn as_lines(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
     }
 
     fn make_systemctl_rule() -> Rule {
@@ -1066,7 +1104,7 @@ mod tests {
     fn test_resolve_within_roots_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        std::fs::write(&file_path, "hello").unwrap();
+        write(&file_path, "hello").unwrap();
 
         let roots = vec![dir.path().to_string_lossy().to_string()];
         assert!(resolve_within_roots(&file_path, &roots).is_ok());
@@ -1077,7 +1115,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let file_path = outside.path().join("test.txt");
-        std::fs::write(&file_path, "hello").unwrap();
+        write(&file_path, "hello").unwrap();
 
         let roots = vec![dir.path().to_string_lossy().to_string()];
         let err = resolve_within_roots(&file_path, &roots).unwrap_err();
@@ -1108,7 +1146,7 @@ mod tests {
         // Use a temp file (not a symlink) with implicit_symlinks=true
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("mybinary");
-        std::fs::write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        write(&bin_path, "#!/bin/sh\necho hi").unwrap();
         let result = resolve_binary(bin_path.to_str().unwrap(), true).unwrap();
         // canonicalize resolves, so result should be an absolute path
         assert!(result.contains("mybinary"));
@@ -1118,7 +1156,7 @@ mod tests {
     fn test_resolve_binary_implicit_symlinks_false_not_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let bin_path = dir.path().join("mybinary");
-        std::fs::write(&bin_path, "#!/bin/sh\necho hi").unwrap();
+        write(&bin_path, "#!/bin/sh\necho hi").unwrap();
         let result = resolve_binary(bin_path.to_str().unwrap(), false).unwrap();
         assert_eq!(result, bin_path.to_str().unwrap());
     }
@@ -1127,7 +1165,7 @@ mod tests {
     fn test_resolve_binary_implicit_symlinks_false_is_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let real_file = dir.path().join("real");
-        std::fs::write(&real_file, "content").unwrap();
+        write(&real_file, "content").unwrap();
         let symlink_path = dir.path().join("link");
         std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
 
@@ -1256,7 +1294,7 @@ mod tests {
     fn test_action_read_file_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("readme.txt");
-        std::fs::write(&file_path, "hello world").unwrap();
+        write(&file_path, "hello world").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1272,7 +1310,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("large.txt");
         let big_content = "a".repeat(500);
-        std::fs::write(&file_path, &big_content).unwrap();
+        write(&file_path, &big_content).unwrap();
 
         let config = Config {
             global: Global {
@@ -1295,7 +1333,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let file_path = outside.path().join("secret.txt");
-        std::fs::write(&file_path, "secret").unwrap();
+        write(&file_path, "secret").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1317,8 +1355,7 @@ mod tests {
     fn test_action_tail_file_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.log");
-        let content = "line1\nline2\nline3\n";
-        std::fs::write(&file_path, content).unwrap();
+        write(&file_path, "line1\nline2\nline3\n").unwrap();
 
         let config = Config {
             global: Global {
@@ -1329,16 +1366,16 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_tail_file(file_path.to_str().unwrap(), 10, &config);
-        assert!(result.is_ok());
+        let result = action_tail_file(file_path.to_str().unwrap(), 2, &config).unwrap();
+        assert_eq!(result, as_lines(&["line2\n", "line3\n"]));
     }
 
     #[test]
     fn test_action_tail_file_failure() {
         let dir = tempfile::tempdir().unwrap();
-        // Path within roots but file doesn't exist → tail fails
-        // Create a directory - tail will fail on it since it's not a regular file
-        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        // Path within roots but file doesn't exist -> tail fails
+        // Create a directory, tail will fail on it since it's not a regular file
+        create_dir(dir.path().join("subdir")).unwrap();
         let bad_path = dir.path().join("subdir");
 
         let config = Config {
@@ -1361,11 +1398,7 @@ mod tests {
     fn test_action_tail_file_lines_capped() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("long.log");
-        let mut content = String::new();
-        for i in 0..20 {
-            let _ = writeln!(&mut content, "line{i}");
-        }
-        std::fs::write(&file_path, &content).unwrap();
+        write(&file_path, numbered_lines(20)).unwrap();
 
         let config = Config {
             global: Global {
@@ -1376,9 +1409,111 @@ mod tests {
             ..Default::default()
         };
 
-        // Request 100 lines, but should be capped to 5
-        let result = action_tail_file(file_path.to_str().unwrap(), 100, &config);
-        assert!(result.is_ok());
+        let result = action_tail_file(file_path.to_str().unwrap(), 100, &config).unwrap();
+        assert_eq!(
+            result,
+            as_lines(&["line15\n", "line16\n", "line17\n", "line18\n", "line19\n"])
+        );
+    }
+
+    #[test]
+    fn test_read_tail_lines_counts_and_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("numbered.log");
+        write(&file_path, numbered_lines(5)).unwrap();
+
+        // More requested than present -> every line, original order.
+        assert_eq!(
+            read_tail_lines(&file_path, 10, 100).unwrap(),
+            as_lines(&["line0\n", "line1\n", "line2\n", "line3\n", "line4\n"])
+        );
+        // Exactly the file length.
+        assert_eq!(
+            read_tail_lines(&file_path, 5, 100).unwrap(),
+            as_lines(&["line0\n", "line1\n", "line2\n", "line3\n", "line4\n"])
+        );
+        // Last two, order preserved.
+        assert_eq!(
+            read_tail_lines(&file_path, 2, 100).unwrap(),
+            as_lines(&["line3\n", "line4\n"])
+        );
+        // Single line.
+        assert_eq!(
+            read_tail_lines(&file_path, 1, 100).unwrap(),
+            as_lines(&["line4\n"])
+        );
+    }
+
+    #[test]
+    fn test_read_tail_lines_zero_request_or_zero_cap_yields_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("numbered.log");
+        write(&file_path, numbered_lines(20)).unwrap();
+
+        assert!(read_tail_lines(&file_path, 0, 100).unwrap().is_empty());
+        assert!(read_tail_lines(&file_path, 10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_read_tail_lines_cap_clamps_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("numbered.log");
+        write(&file_path, numbered_lines(20)).unwrap();
+
+        assert_eq!(
+            read_tail_lines(&file_path, 100, 3).unwrap(),
+            as_lines(&["line17\n", "line18\n", "line19\n"])
+        );
+    }
+
+    #[test]
+    fn test_read_tail_lines_empty_file_and_no_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let empty = dir.path().join("empty.log");
+        write(&empty, "").unwrap();
+        assert!(read_tail_lines(&empty, 5, 100).unwrap().is_empty());
+
+        // A final line without a trailing newline is still a line.
+        let partial = dir.path().join("partial.log");
+        write(&partial, "a\nb\nc").unwrap();
+        assert_eq!(
+            read_tail_lines(&partial, 2, 100).unwrap(),
+            as_lines(&["b\n", "c"])
+        );
+        assert_eq!(read_tail_lines(&partial, 1, 100).unwrap(), as_lines(&["c"]));
+    }
+
+    #[test]
+    fn test_read_tail_lines_preserves_blank_and_crlf_lines_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let blanks = dir.path().join("blanks.log");
+        write(&blanks, "x\n\n   \ny\n").unwrap();
+        assert_eq!(
+            read_tail_lines(&blanks, 4, 100).unwrap(),
+            as_lines(&["x\n", "\n", "   \n", "y\n"])
+        );
+
+        // CRLF is not translated: bytes come back as-is.
+        let crlf = dir.path().join("crlf.log");
+        write(&crlf, "a\r\nb\r\nc\r\n").unwrap();
+        assert_eq!(
+            read_tail_lines(&crlf, 2, 100).unwrap(),
+            as_lines(&["b\r\n", "c\r\n"])
+        );
+    }
+
+    #[test]
+    fn test_read_tail_lines_missing_file_is_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.log");
+
+        let err = read_tail_lines(&missing, 10, 100).unwrap_err();
+        assert!(
+            matches!(err, GuardError::Action(ref msg) if msg.contains("tail failed")),
+            "expected tail failure, got {err:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1389,7 +1524,7 @@ mod tests {
     fn test_action_stat_path_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("afile.txt");
-        std::fs::write(&file_path, "data").unwrap();
+        write(&file_path, "data").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1404,7 +1539,7 @@ mod tests {
     fn test_action_stat_path_directory() {
         let dir = tempfile::tempdir().unwrap();
         let sub_dir = dir.path().join("subdir");
-        std::fs::create_dir(&sub_dir).unwrap();
+        create_dir(&sub_dir).unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1419,7 +1554,7 @@ mod tests {
     fn test_action_stat_path_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let real_file = dir.path().join("real.txt");
-        std::fs::write(&real_file, "data").unwrap();
+        write(&real_file, "data").unwrap();
         let link_path = dir.path().join("link.txt");
         std::os::unix::fs::symlink(&real_file, &link_path).unwrap();
 
@@ -1463,7 +1598,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let real_file = outside.path().join("secret.txt");
-        std::fs::write(&real_file, "data").unwrap();
+        write(&real_file, "data").unwrap();
         let link_path = dir.path().join("link.txt");
         std::os::unix::fs::symlink(&real_file, &link_path).unwrap();
 
@@ -1486,7 +1621,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let real_file = outside.path().join("secret.txt");
-        std::fs::write(&real_file, "data").unwrap();
+        write(&real_file, "data").unwrap();
 
         // Build a path inside `dir` that traverses up to the outside file.
         let traversal = dir.path().join("..").join("..").join("..").join("..");
@@ -1511,9 +1646,9 @@ mod tests {
     #[test]
     fn test_action_list_dir_success() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "").unwrap();
-        std::fs::write(dir.path().join("b.txt"), "").unwrap();
-        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        write(dir.path().join("a.txt"), "").unwrap();
+        write(dir.path().join("b.txt"), "").unwrap();
+        create_dir(dir.path().join("sub")).unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1582,7 +1717,7 @@ mod tests {
     fn test_execute_read_file_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("data.txt");
-        std::fs::write(&file_path, "content").unwrap();
+        write(&file_path, "content").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1652,7 +1787,7 @@ mod tests {
     fn test_execute_tail_file_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("app.log");
-        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+        write(&file_path, "line1\nline2\n").unwrap();
 
         let config = Config {
             global: Global {
@@ -1716,7 +1851,7 @@ mod tests {
     fn test_execute_tail_file_lines_from_capture() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("app.log");
-        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+        write(&file_path, "line1\nline2\n").unwrap();
 
         let config = Config {
             global: Global {
@@ -1746,7 +1881,7 @@ mod tests {
         // → falls back to default_lines
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("app.log");
-        std::fs::write(&file_path, "line1\n").unwrap();
+        write(&file_path, "line1\n").unwrap();
 
         let config = Config {
             global: Global {
@@ -1789,7 +1924,7 @@ mod tests {
     fn test_execute_stat_path_success() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("stat.txt");
-        std::fs::write(&file_path, "data").unwrap();
+        write(&file_path, "data").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1856,8 +1991,8 @@ mod tests {
     #[test]
     fn test_execute_list_dir_success() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "").unwrap();
-        std::fs::write(dir.path().join("b.txt"), "").unwrap();
+        write(dir.path().join("a.txt"), "").unwrap();
+        write(dir.path().join("b.txt"), "").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1925,7 +2060,7 @@ mod tests {
     fn test_lookup_capture_accepts_braced_reference() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("data.txt");
-        std::fs::write(&file_path, "content").unwrap();
+        write(&file_path, "content").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -1946,7 +2081,7 @@ mod tests {
     fn test_lookup_capture_named_capture_end_to_end() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("app.log");
-        std::fs::write(&file_path, "l1\nl2\nl3\n").unwrap();
+        write(&file_path, "l1\nl2\nl3\n").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -2033,7 +2168,7 @@ mod tests {
     fn test_execute_dispatches_read_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("exec.txt");
-        std::fs::write(&file_path, "content").unwrap();
+        write(&file_path, "content").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -2063,7 +2198,7 @@ mod tests {
     fn test_execute_dispatches_tail_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("exec.log");
-        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+        write(&file_path, "line1\nline2\n").unwrap();
 
         let config = Config {
             global: Global {
@@ -2099,7 +2234,7 @@ mod tests {
     fn test_execute_dispatches_stat_path() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("exec_stat.txt");
-        std::fs::write(&file_path, "data").unwrap();
+        write(&file_path, "data").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
@@ -2128,7 +2263,7 @@ mod tests {
     #[test]
     fn test_execute_dispatches_list_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("f1.txt"), "").unwrap();
+        write(dir.path().join("f1.txt"), "").unwrap();
 
         let config = Config {
             roots: vec![dir.path().to_string_lossy().to_string()],
