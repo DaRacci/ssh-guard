@@ -193,14 +193,14 @@ Merge rules for profiles:
 Instead of hand-writing rules, you can add them with the CLI:
 
 ```sh
-ssh-guard add-rule --config /etc/ssh-guard/config.toml \
+ssh-guard add-rule --config /etc/ssh_guard/config.toml \
   --cmd "systemctl status sshd"
 ```
 
 To add to a profile:
 
 ```sh
-ssh-guard add-rule --config /etc/ssh-guard/config.toml \
+ssh-guard add-rule --config /etc/ssh_guard/config.toml \
   --profile admin --cmd "journalctl -n 10"
 ```
 
@@ -217,7 +217,7 @@ It is recommended to review the config after using this command.
 Instead of hand-writing `help_text`, you can render a usage listing derived from the rules:
 
 ```sh
-ssh-guard help --config /etc/ssh-guard/config.toml
+ssh-guard help --config /etc/ssh_guard/config.toml
 ```
 
 Options:

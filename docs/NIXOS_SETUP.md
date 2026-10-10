@@ -66,8 +66,8 @@ Import module:
 
 | Behaviour | Detail |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Config file** | Single `/etc/ssh-guard/config.toml` generated from `settings` with embedded `[profiles.<name>]` sections. |
-| **SSH forced commands** | Each profile appends a `Match User` / `ForceCommand` block to `services.openssh.extraConfig` pointing `ssh-guard run --config /etc/ssh-guard/config.toml`. |
+| **Config file** | Single `/etc/ssh_guard/config.toml` generated from `settings` with embedded `[profiles.<name>]` sections. |
+| **SSH forced commands** | Each profile appends a `Match User` / `ForceCommand` block to `services.openssh.extraConfig` pointing `ssh-guard run --config /etc/ssh_guard/config.toml`. |
 | **User deduplication** | Assertion fails if an SSH user appears in more than one profile. |
 | **Missing users** | Warning if a profile references a user not defined in `users.users`. |
 | **Login shell check** | Assertion fails if a profile user's `shell` is `nologin` or `false`; the guard is invoked via the login shell and would fail to start. |
@@ -78,7 +78,7 @@ Import module:
 | ---------------------------------------- | --------------------- | ---------------------------------------------------- |
 | `services.ssh-guard.enable` | `bool` | Enable the ssh-guard module. |
 | `services.ssh-guard.package` | `package` | ssh-guard package for ForceCommand. |
-| `services.ssh-guard.settings` | TOML attrset | Base config written to `/etc/ssh-guard/config.toml`. |
+| `services.ssh-guard.settings` | TOML attrset | Base config written to `/etc/ssh_guard/config.toml`. |
 | `services.ssh-guard.profiles` | attrset of submodules | Named profiles. |
 | `profiles.<name>.users` | `list of string` | SSH usernames matched by this profile. Must exist in `users.users`. |
 | `profiles.<name>.settings` | TOML attrset | Per-profile config merged into the profile entry. |

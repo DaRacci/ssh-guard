@@ -31,8 +31,8 @@ The config defines what commands are allowed.
 Anyone who can edit it can grant themselves arbitrary commands. Protect it with root ownership and restrictive permissions:
 
 ```sh
-sudo chown root:root /etc/ssh-guard/config.toml
-sudo chmod 0644 /etc/ssh-guard/config.toml
+sudo chown root:root /etc/ssh_guard/config.toml
+sudo chmod 0644 /etc/ssh_guard/config.toml
 ```
 
 > **Note:** the guard runs as the SSH user, not as root, so the config must be readable by that user.

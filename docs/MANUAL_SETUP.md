@@ -66,7 +66,7 @@ Choose the one that fits your setup.
 For each key that should be restricted, prefix its line in `~/.ssh/authorized_keys` with a `command=` directive:
 
 ```
-command="/usr/local/bin/ssh-guard run --config /etc/ssh-guard/config.toml",no-pty,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+command="/usr/local/bin/ssh-guard run --config /etc/ssh_guard/config.toml",no-pty,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
 ```
 
 When that key connects, OpenSSH runs `ssh-guard run` instead of the user's shell, and passes the typed command via `SSH_ORIGINAL_COMMAND`.
@@ -77,7 +77,7 @@ Apply to all matching connections in `/etc/ssh/sshd_config`:
 
 ```sshd_config
 Match Group restricted
-    ForceCommand /usr/local/bin/ssh-guard run --config /etc/ssh-guard/config.toml
+    ForceCommand /usr/local/bin/ssh-guard run --config /etc/ssh_guard/config.toml
 ```
 
 > **Note:** `ForceCommand` overrides the `command=` in `authorized_keys` and any shell.
@@ -87,7 +87,7 @@ Match Group restricted
 
 ```conf
 Match Group restricted
-    ForceCommand /usr/local/bin/ssh-guard run --config /etc/ssh-guard/config.toml
+    ForceCommand /usr/local/bin/ssh-guard run --config /etc/ssh_guard/config.toml
     PermitTTY no
     AllowAgentForwarding no
     AllowTcpForwarding no
@@ -108,13 +108,13 @@ Before relying on it, validate the config.
 The `validate` subcommand checks binary paths, symlink handling, and duplicate users:
 
 ```sh
-ssh-guard validate --config /etc/ssh-guard/config.toml
+ssh-guard validate --config /etc/ssh_guard/config.toml
 ```
 
 Expected output on success:
 
 ```
-Validating config: /etc/ssh-guard/config.toml
+Validating config: /etc/ssh_guard/config.toml
 Config is valid. N base rule(s), M profile rule(s) (T total).
 ```
 
@@ -146,7 +146,7 @@ You can simulate what OpenSSH does by setting `SSH_ORIGINAL_COMMAND` and running
 
 ```sh
 SSH_ORIGINAL_COMMAND="systemctl status sshd" \
-  ssh-guard run --config /etc/ssh-guard/config.toml
+  ssh-guard run --config /etc/ssh_guard/config.toml
 ```
 
 You should see the `systemctl status sshd` output.
@@ -155,7 +155,7 @@ You should see the `systemctl status sshd` output.
 
 ```sh
 SSH_ORIGINAL_COMMAND="rm -rf /" \
-  ssh-guard run --config /etc/ssh-guard/config.toml
+  ssh-guard run --config /etc/ssh_guard/config.toml
 ```
 
 This should fail with `no matching rule` and exit non-zero.

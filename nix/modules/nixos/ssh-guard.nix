@@ -70,7 +70,7 @@ let
   sshdMatchBlock =
     pName: users:
     let
-      configPath = "/etc/ssh-guard/config.toml";
+      configPath = "/etc/ssh_guard/config.toml";
       guardBin = "${lib.getExe cfg.package}";
     in
     ''
@@ -99,7 +99,7 @@ in
       inherit (tomlFormat) type;
       default = { };
       description = ''
-        Base configuration for ssh-guard, written as TOML to {file}`/etc/ssh-guard/config.toml`.
+        Base configuration for ssh-guard, written as TOML to {file}`/etc/ssh_guard/config.toml`.
         Profile-local settings defined under {option}`profiles.<name>.settings` are merged into each profile entry inside the same file.
 
         Do not define `profiles` here, they are declared via {option}`profiles` option instead.
