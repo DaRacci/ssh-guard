@@ -246,10 +246,9 @@ implicit_symlinks = true
             tmp,
             r#"
 [[rules]]
-action = {{ type = "run", binary = "{}", args = [] }}
+action = {{ type = "run", binary = "{relative_path}", args = [] }}
 implicit_symlinks = true
-"#,
-            relative_path
+"#
         )
         .unwrap();
 

@@ -6,6 +6,7 @@
 #![deny(clippy::todo)]
 #![deny(clippy::pedantic)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::panic))]
 #![feature(coverage_attribute)]
 
 pub mod actions;

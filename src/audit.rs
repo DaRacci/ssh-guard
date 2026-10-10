@@ -154,13 +154,13 @@ impl AuditEvent {
         match &self.status {
             AuditResult::Started { detail } => {
                 parts.extend([
-                    format!("status=started"),
+                    "status=started".to_string(),
                     format!("status.detail=\"{}\"", detail.as_deref().unwrap_or("")),
                 ]);
             }
             AuditResult::Allowed { exit_code, detail } => {
                 parts.extend([
-                    format!("status=allowed"),
+                    "status=allowed".to_string(),
                     format!("status.exit_code={exit_code}"),
                     format!("status.detail=\"{}\"", detail.as_deref().unwrap_or("")),
                 ]);
@@ -171,9 +171,9 @@ impl AuditEvent {
                 failures,
             } => {
                 parts.extend([
-                    format!("status=denied"),
+                    "status=denied".to_string(),
                     format!("status.exit_code={exit_code}"),
-                    format!("status.reason=\"{}\"", reason),
+                    format!("status.reason=\"{reason}\""),
                 ]);
 
                 if !failures.is_empty() {
