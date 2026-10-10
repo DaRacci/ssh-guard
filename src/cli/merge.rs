@@ -1,3 +1,7 @@
+use std::env;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
 use crate::config::{
     Config, action::Action, arg::ArgStyle, duration::Duration, rule::Rule, subcommand::Subcommand,
 };
@@ -113,7 +117,7 @@ fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a m
 
     let new_rule = Rule {
         action: Action::Run {
-            binary: format!("/run/current-system/sw/bin/{binary_name}"),
+            binary: resolve_binary_path(binary_name),
             args: vec![],
             timeout: Duration::default(),
         },
@@ -129,6 +133,33 @@ fn find_or_create_rule<'a>(rules: &'a mut Vec<Rule>, binary_name: &str) -> &'a m
     rules.push(new_rule);
     let rule_index = rules.len() - 1;
     &mut rules[rule_index]
+}
+
+/// Resolve `binary_name` to an absolute path by searching `PATH`.
+///
+/// If `binary_name` already contains a path separator it is returned as-is so explicit paths are preserved.
+/// Otherwise the first executable match on `PATH` is used, falling back to the bare name when no match is found.
+fn resolve_binary_path(binary_name: &str) -> String {
+    if binary_name.contains('/') {
+        return binary_name.to_string();
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_var) {
+            let candidate = dir.join(binary_name);
+            if is_executable(&candidate) {
+                return candidate.display().to_string();
+            }
+        }
+    }
+
+    binary_name.to_string()
+}
+
+/// True when `path` points to an executable regular file.
+fn is_executable(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 fn find_or_create_subcommand<'a>(subs: &'a mut Vec<Subcommand>, name: &str) -> &'a mut Subcommand {
@@ -229,6 +260,8 @@ fn auto_create_flag_groups_in_rules(
 mod tests {
     use super::*;
     use crate::config::action::Action;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn create_config(toml_content: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
@@ -251,6 +284,63 @@ action = { type = "show_help" }
         rules.iter().find(|r| {
             matches!(&r.action, Action::Run { binary, .. } if binary.ends_with(&format!("/{name}")) || binary == name)
         })
+    }
+
+    fn write_executable(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, b"").unwrap();
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_resolve_binary_path_finds_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary_path = write_executable(&dir, "mockcmd");
+        let path_value = dir.path().to_string_lossy().to_string();
+
+        temp_env::with_var("PATH", Some(path_value.as_str()), || {
+            assert_eq!(
+                resolve_binary_path("mockcmd"),
+                binary_path.display().to_string()
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_binary_path_preserves_explicit_path() {
+        assert_eq!(
+            resolve_binary_path("/opt/test/bin/env"),
+            "/opt/test/bin/env"
+        );
+        assert_eq!(resolve_binary_path("./script.sh"), "./script.sh");
+    }
+
+    #[test]
+    fn test_resolve_binary_path_missing_falls_back_to_name() {
+        let name = "definitely-not-a-real-binary-xyz";
+        assert_eq!(resolve_binary_path(name), name);
+    }
+
+    #[test]
+    fn test_add_rule_resolves_binary_from_current_path() {
+        let (_dir, path) = minimal_config();
+        let bindir = tempfile::tempdir().unwrap();
+        let binary_path = write_executable(&bindir, "journalctl");
+        let path_value = bindir.path().to_string_lossy().to_string();
+
+        temp_env::with_var("PATH", Some(path_value.as_str()), || {
+            add_rule(&path, "journalctl --no-pager", None).unwrap();
+        });
+
+        let config = Config::from_file(&path).unwrap();
+        let rule = find_rule(&config.rules, "journalctl").unwrap();
+
+        if let Action::Run { binary, .. } = &rule.action {
+            assert_eq!(binary, &binary_path.display().to_string());
+        } else {
+            assert!(false, "expected run action");
+        }
     }
 
     #[test]
@@ -285,7 +375,7 @@ action = { type = "show_help" }
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/systemctl" }
+action = { type = "run", binary = "/opt/test/bin/systemctl" }
 flags = ["--no-pager"]
 "#,
         );
@@ -305,7 +395,7 @@ flags = ["--no-pager"]
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/systemctl" }
+action = { type = "run", binary = "/opt/test/bin/systemctl" }
 
 [[rules.subcommands]]
 name = "status"
@@ -354,7 +444,7 @@ args = ["sshd"]
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/systemctl" }
+action = { type = "run", binary = "/opt/test/bin/systemctl" }
 
 [[rules.subcommands]]
 name = "status"
@@ -495,15 +585,15 @@ action = { type = "show_help" }
 users = ["admin_user"]
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
 flags = ["--no-pager", "--since"]
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
 flags = ["--no-pager", "--since", "-n"]
 
 [[profiles.admin.rules]]
-action = { type = "run", binary = "/run/current-system/sw/bin/journalctl" }
+action = { type = "run", binary = "/opt/test/bin/journalctl" }
 flags = ["--no-pager", "--since", "--full"]
 "#,
         );

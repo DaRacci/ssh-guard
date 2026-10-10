@@ -30,7 +30,10 @@ pub enum Command {
     AddRule {
         #[arg(long)]
         config: Option<String>,
-        /// The command to add, e.g. "journalctl --since yesterday -n 10"
+        /// Command to add, e.g. "journalctl --since yesterday -n 10".
+        ///
+        /// If binary is not an explicit path, `add-rule` resolves it using this host's current `PATH`.
+        /// Review generated config before reusing it on another machine.
         #[arg(long)]
         cmd: String,
         /// Target profile name. If omitted, modifies base config.
