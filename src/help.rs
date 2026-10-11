@@ -36,13 +36,13 @@ pub const PALETTE: ColourPalette = ColourPalette {
     reset: "\x1b[0m",
 };
 
-/// Wrap `text` in an ANSI colour when enabled, else return it unchanged.
+/// Wrap `text` in an ANSI colour when enabled, otherwise return it unchanged.
 fn paint(colour: &str, text: &str, enabled: bool) -> String {
-    if enabled {
-        format!("{colour}{text}{}", PALETTE.reset)
-    } else {
-        text.to_string()
+    if !enabled {
+        return text.to_string();
     }
+
+    format!("{colour}{text}{}", PALETTE.reset)
 }
 
 fn template_label(
@@ -181,7 +181,8 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     lines.join("\n")
 }
 
-/// Filesystem root sets that bound file/path actions, rendered when any are set.
+/// Filesystem root sets that bound file/path actions, rendered when any are set;
+/// returns an empty vec when no roots or root sets are configured.
 ///
 /// With only the default `roots` set the paths are listed flat.
 /// Once a named `[root_sets]` entry exists, every set is listed under its name.
@@ -279,22 +280,70 @@ fn render_rule(config: &Config, rule: &Rule, opts: &HelpOptions) -> String {
     }
 
     if rule.subcommands.is_empty() {
-        prefix_parts.join(" ")
-    } else {
+        return prefix_parts.join(" ");
+    }
+
+    if opts.tree {
         let mut lines = vec![prefix_parts.join(" ")];
         for subcommand in &rule.subcommands {
-            lines.push(render_subcommand(config, subcommand, 1, opts));
+            lines.push(render_subcommand_tree(config, subcommand, 1, opts));
         }
-        lines.join("\n")
+        return lines.join("\n");
     }
+
+    render_rule_inline(config, rule, &prefix_parts, opts)
 }
 
-fn render_subcommand(
+fn render_rule_inline(
+    config: &Config,
+    rule: &Rule,
+    prefix_parts: &[String],
+    opts: &HelpOptions,
+) -> String {
+    rule.subcommands
+        .iter()
+        .flat_map(|subcommand| render_subcommand_inline_paths(config, subcommand, opts))
+        .map(|suffix| format!("{} {suffix}", prefix_parts.join(" ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_subcommand_tree(
     config: &Config,
     sub: &Subcommand,
     depth: usize,
     opts: &HelpOptions,
 ) -> String {
+    let mut lines = vec![format!(
+        "{}{}",
+        "  ".repeat(depth),
+        render_subcommand_head(config, sub, opts)
+    )];
+    for nested in &sub.subcommands {
+        lines.push(render_subcommand_tree(config, nested, depth + 1, opts));
+    }
+    lines.join("\n")
+}
+
+fn render_subcommand_inline_paths(
+    config: &Config,
+    sub: &Subcommand,
+    opts: &HelpOptions,
+) -> Vec<String> {
+    let head = render_subcommand_head(config, sub, opts);
+    let mut paths = vec![head.clone()];
+
+    paths.extend(
+        sub.subcommands
+            .iter()
+            .flat_map(|nested| render_subcommand_inline_paths(config, nested, opts))
+            .map(|tail| format!("{head} {tail}")),
+    );
+
+    paths
+}
+
+fn render_subcommand_head(config: &Config, sub: &Subcommand, opts: &HelpOptions) -> String {
     let flags = expand_flags(&config.flag_groups, &sub.flag_groups, &sub.flags);
     let mut parts = vec![paint(PALETTE.subcommand, &sub.name, opts.colour)];
 
@@ -308,11 +357,7 @@ fn render_subcommand(
         parts.push(rendered_args);
     }
 
-    let mut lines = vec![format!("{}{}", "  ".repeat(depth), parts.join(" "))];
-    for nested in &sub.subcommands {
-        lines.push(render_subcommand(config, nested, depth + 1, opts));
-    }
-    lines.join("\n")
+    parts.join(" ")
 }
 
 fn render_optional_args(
@@ -724,52 +769,164 @@ mod tests {
         assert_eq!(paint("\x1b[34m", "hello", true), "\x1b[34mhello\x1b[0m");
     }
 
+    fn colour_opts() -> HelpOptions {
+        HelpOptions {
+            tree: false,
+            verbose: false,
+            colour: true,
+        }
+    }
+
+    fn tree_opts() -> HelpOptions {
+        HelpOptions {
+            tree: true,
+            verbose: false,
+            colour: false,
+        }
+    }
+
+    fn verbose_opts() -> HelpOptions {
+        HelpOptions {
+            tree: false,
+            verbose: true,
+            colour: false,
+        }
+    }
+
     #[test]
-    fn test_render_default_single_command_with_subcommands() {
+    fn test_wrap_optional_plain() {
+        assert_eq!(wrap_optional("--since", &opts(false)), "[--since]");
+    }
+
+    #[test]
+    fn test_wrap_optional_coloured() {
+        let rendered = wrap_optional(&paint(PALETTE.literal, "--since", true), &colour_opts());
+        assert_eq!(
+            rendered,
+            format!(
+                "{}{}{}",
+                paint(PALETTE.dim, "[", true),
+                paint(PALETTE.literal, "--since", true),
+                paint(PALETTE.dim, "]", true)
+            )
+        );
+    }
+
+    #[test]
+    fn test_describe_template_contracts() {
+        let mut c = contracts();
+        c.insert("name".into(), Contract::StringLen { min: 1, max: 32 });
+
+        assert_eq!(
+            describe_template(&TemplateType::ContractRef("port".into()), &c),
+            "integer 1024..65535"
+        );
+        assert_eq!(
+            describe_template(&TemplateType::ContractRef("unit".into()), &c),
+            "one of: sshd | nginx"
+        );
+        assert_eq!(
+            describe_template(&TemplateType::ContractRef("name".into()), &c),
+            "text 1..32 chars"
+        );
+        assert_eq!(
+            describe_template(&TemplateType::ContractRef("unknown".into()), &c),
+            "value matching contract 'unknown'"
+        );
+    }
+
+    #[test]
+    fn test_describe_template_named_and_union() {
+        let named = TemplateType::Named {
+            name: "path".into(),
+            inner: Box::new(TemplateType::String),
+        };
+        let union = TemplateType::Union(vec![TemplateType::Int, TemplateType::String]);
+
+        assert_eq!(describe_template(&named, &HashMap::new()), "text value");
+        assert_eq!(
+            describe_template(&union, &HashMap::new()),
+            "one of: integer | text value"
+        );
+    }
+
+    #[test]
+    fn test_detail_description_literal_none() {
+        assert_eq!(
+            detail_description(&ArgPattern::Literal("status".into()), &contracts()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_detail_description_template_context() {
+        let pattern = parse_arg_pattern("{unit}.service");
+        assert_eq!(
+            detail_description(&pattern, &contracts()),
+            Some("one of: sshd | nginx; literal suffix '.service'".into())
+        );
+    }
+
+    #[test]
+    fn test_render_pattern_inline_flag_plain() {
+        let pattern = parse_arg_pattern("-n={int}");
+        assert_eq!(
+            render_pattern(&pattern, &HashMap::new(), &opts(false)),
+            "-n=<int>"
+        );
+    }
+
+    #[test]
+    fn test_render_pattern_inline_flag_coloured() {
+        let pattern = parse_arg_pattern("-n={int}");
+        assert_eq!(
+            render_pattern(&pattern, &HashMap::new(), &colour_opts()),
+            format!(
+                "{}{}{}",
+                paint(PALETTE.literal, "-n", true),
+                paint(PALETTE.dim, "=", true),
+                paint(PALETTE.template, "<int>", true)
+            )
+        );
+    }
+
+    #[test]
+    fn test_render_optional_args_wraps_each_flag() {
+        assert_eq!(
+            render_optional_args(
+                &["--since".into(), "-n={int}".into()],
+                &HashMap::new(),
+                &opts(false)
+            ),
+            "[--since] [-n=<int>]"
+        );
+    }
+
+    #[test]
+    fn test_render_rule_inline_lists_nested_command_and_leaf_paths_by_default() {
         let config = Config {
             rules: vec![run_rule(
-                "systemctl",
-                vec![sub("status", vec!["{unit}.service".into()])],
+                "git",
+                vec![Subcommand {
+                    name: "remote".into(),
+                    arg_style: None,
+                    flag_groups: vec![],
+                    flags: vec![],
+                    args: vec![],
+                    pre_args: vec![],
+                    subcommands: vec![sub("add", vec!["{string}".into()])],
+                }],
                 vec![],
             )],
-            contracts: contracts(),
             ..Default::default()
         };
-        let out = render_help(&config, &HelpOptions::default());
-        assert!(
-            out.contains("systemctl\n  status <unit>.service"),
-            "got: {out}"
-        );
+
+        let out = render_rule(&config, &config.rules[0], &HelpOptions::default());
+        assert_eq!(out, "git remote\ngit remote add <string>");
     }
 
     #[test]
-    fn test_render_default_multiple_commands() {
-        let config = Config {
-            rules: vec![
-                run_rule(
-                    "systemctl",
-                    vec![sub("status", vec!["{unit}.service".into()])],
-                    vec![],
-                ),
-                run_rule(
-                    "journalctl",
-                    vec![],
-                    vec!["-n={int}".into(), "--since".into()],
-                ),
-            ],
-            contracts: contracts(),
-            ..Default::default()
-        };
-        let out = render_help(&config, &HelpOptions::default());
-        assert!(
-            out.contains("systemctl\n  status <unit>.service"),
-            "got: {out}"
-        );
-        assert!(out.contains("journalctl -n=<int> --since"), "got: {out}");
-    }
-
-    #[test]
-    fn test_render_default_subcommands_indented() {
+    fn test_render_rule_inline_lists_multiple_command_paths() {
         let config = Config {
             rules: vec![run_rule(
                 "systemctl",
@@ -782,10 +939,11 @@ mod tests {
             contracts: contracts(),
             ..Default::default()
         };
-        let out = render_help(&config, &HelpOptions::default());
-        assert!(
-            out.contains("systemctl\n  status <unit>.service\n  show <unit>"),
-            "got: {out}"
+
+        let out = render_rule(&config, &config.rules[0], &HelpOptions::default());
+        assert_eq!(
+            out,
+            "systemctl status <unit>.service\nsystemctl show <unit>"
         );
     }
 
@@ -794,25 +952,82 @@ mod tests {
         let config = Config {
             rules: vec![run_rule(
                 "git",
-                vec![sub("log", vec!["--oneline".into()])],
+                vec![Subcommand {
+                    name: "remote".into(),
+                    arg_style: None,
+                    flag_groups: vec![],
+                    flags: vec![],
+                    args: vec![],
+                    pre_args: vec![],
+                    subcommands: vec![sub("add", vec!["{string}".into()])],
+                }],
                 vec![],
             )],
             ..Default::default()
         };
-        let out = render_help(
-            &config,
-            &HelpOptions {
-                tree: true,
-                verbose: false,
-                colour: false,
-            },
-        );
-        assert!(out.contains("git"), "got: {out}");
-        assert!(out.contains("log --oneline"), "got: {out}");
+
+        let out = render_rule(&config, &config.rules[0], &tree_opts());
+        assert_eq!(out, "git\n  remote\n    add <string>");
     }
 
     #[test]
-    fn test_render_skips_show_help() {
+    fn test_render_help_sections_order() {
+        let config = Config {
+            rules: vec![run_rule(
+                "systemctl",
+                vec![sub("status", vec!["{unit}.service".into()])],
+                vec![],
+            )],
+            contracts: contracts(),
+            roots: vec!["/var/log".into()],
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &HelpOptions::default());
+        let legend_idx = out.find("Legend:");
+        let details_idx = out.find("Value details:");
+        let commands_idx = out.find("Allowed commands:");
+        let roots_idx = out.find("Allowed roots:");
+
+        assert!(
+            matches!(
+                (legend_idx, details_idx, commands_idx, roots_idx),
+                (Some(legend), Some(details), Some(commands), Some(roots))
+                    if legend < details && details < commands && commands < roots
+            ),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_help_default_mode_inlines_subcommands() {
+        let config = Config {
+            rules: vec![run_rule(
+                "systemctl",
+                vec![
+                    sub("status", vec!["{unit}.service".into()]),
+                    sub("show", vec!["{unit}".into()]),
+                ],
+                vec![],
+            )],
+            contracts: contracts(),
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(
+            out.lines()
+                .any(|line| line == "systemctl status <unit>.service"),
+            "got: {out}"
+        );
+        assert!(
+            out.lines().any(|line| line == "systemctl show <unit>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_help_skips_show_help_line() {
         let config = Config {
             rules: vec![
                 run_rule("systemctl", vec![], vec![]),
@@ -830,38 +1045,46 @@ mod tests {
             ],
             ..Default::default()
         };
+
         let out = render_help(&config, &HelpOptions::default());
-        assert!(out.contains("systemctl"), "got: {out}");
+        assert!(out.lines().any(|line| line == "systemctl"), "got: {out}");
         assert!(
-            !out.contains("help"),
+            !out.lines().any(|line| line.trim() == "help"),
             "show_help rule should be skipped, got: {out}"
         );
     }
 
     #[test]
-    fn test_render_inline_flag() {
-        let config = Config {
-            rules: vec![run_rule("git", vec![], vec!["--depth={int}".into()])],
-            ..Default::default()
-        };
-        let out = render_help(&config, &HelpOptions::default());
-        assert!(out.contains("--depth=<int>"), "got: {out}");
-    }
-
-    #[test]
-    fn test_render_empty_rules() {
+    fn test_render_help_empty_rules_has_headers() {
         let config = Config::default();
         let out = render_help(&config, &HelpOptions::default());
-        assert!(out.contains("Allowed commands"), "got: {out}");
+        assert!(out.contains("Legend:"), "got: {out}");
+        assert!(out.contains("Allowed commands:"), "got: {out}");
     }
 
     #[test]
-    fn test_render_includes_allowed_roots() {
+    fn test_render_roots_empty_returns_empty_section() {
+        let config = Config::default();
+        assert!(render_roots(&config, &HelpOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn test_render_roots_lines_plain() {
         let config = Config {
-            rules: vec![run_rule("cat", vec![], vec!["{path:string}".into()])],
             roots: vec!["/var/log".into(), "/etc/nginx".into()],
             ..Default::default()
         };
+        assert_eq!(
+            render_roots(&config, &HelpOptions::default()),
+            vec![
+                String::new(),
+                "Allowed roots:".into(),
+                String::new(),
+                "  /var/log".into(),
+                "  /etc/nginx".into(),
+            ]
+        );
+
         let out = render_help(&config, &HelpOptions::default());
         assert!(out.contains("Allowed roots:"), "got: {out}");
         assert!(out.contains("/var/log"), "got: {out}");
@@ -945,6 +1168,27 @@ mod tests {
             },
         );
         assert!(out.contains("\x1b[32mapp\x1b[0m:"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_roots_use_literal_palette_when_coloured() {
+        let config = Config {
+            roots: vec!["/var/log".into()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            render_roots(&config, &colour_opts())[3],
+            format!("  {}", paint(PALETTE.literal, "/var/log", true))
+        );
+    }
+
+    #[test]
+    fn test_render_legend_examples_plain() {
+        let legend = render_legend(&HelpOptions::default());
+        assert_eq!(legend[0], "Legend:");
+        assert!(legend.iter().any(|line| line.contains("[--flag]")));
+        assert!(legend.iter().any(|line| line.contains("<value>")));
     }
 
     #[test]
@@ -1078,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_value_details_include_top_level_flag_groups() {
+    fn test_collect_value_details_include_top_level_flag_groups() {
         let mut flag_groups = HashMap::new();
         flag_groups.insert("service-flags".into(), vec!["--port={port}".into()]);
 
@@ -1103,93 +1347,74 @@ mod tests {
             ..Default::default()
         };
 
-        let out = render_help(&config, &HelpOptions::default());
-        assert!(out.contains("[--port=<port>]"), "got: {out}");
-        assert!(out.contains("integer 1024..65535"), "got: {out}");
+        let details = collect_value_details(&config, &HelpOptions::default());
+        assert!(details.contains(&ValueDetail {
+            plain_token: "[--port=<port>]".into(),
+            display_token: "[--port=<port>]".into(),
+            description: "integer 1024..65535".into(),
+        }));
     }
 
     #[test]
-    fn test_render_inline_flag_equals_dimmed_when_coloured() {
-        let config = Config {
-            rules: vec![run_rule("journalctl", vec![], vec!["-n={int}".into()])],
-            ..Default::default()
-        };
-        let out = render_help(
-            &config,
-            &HelpOptions {
-                tree: false,
-                verbose: false,
-                colour: true,
-            },
-        );
-        assert!(
-            out.contains("\x1b[36m-n\x1b[0m\x1b[2m=\x1b[0m\x1b[34m<int>\x1b[0m"),
-            "got: {out}"
-        );
-    }
-
-    #[test]
-    fn test_render_colour_contract_blue() {
+    fn test_collect_value_details_deduplicates_repeated_tokens() {
         let config = Config {
             rules: vec![run_rule(
                 "systemctl",
-                vec![sub("status", vec!["{unit}.service".into()])],
+                vec![
+                    sub("show", vec!["{unit}".into()]),
+                    sub("restart", vec!["{unit}".into()]),
+                ],
                 vec![],
             )],
             contracts: contracts(),
             ..Default::default()
         };
-        let out = render_help(
-            &config,
-            &HelpOptions {
-                tree: false,
-                verbose: false,
-                colour: true,
-            },
-        );
-        assert!(
-            out.contains("\x1b[34m<unit>\x1b[0m"),
-            "template should be blue, got: {out}"
+
+        let details = collect_value_details(&config, &HelpOptions::default());
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.plain_token == "<unit>"
+                    && detail.description == "one of: sshd | nginx")
+                .count(),
+            1
         );
     }
 
     #[test]
-    fn test_render_colour_command_bold() {
+    fn test_render_help_verbose_contract_labels() {
+        let config = Config {
+            rules: vec![run_rule("cat", vec![], vec!["{port}".into()])],
+            contracts: contracts(),
+            ..Default::default()
+        };
+
+        let out = render_help(&config, &verbose_opts());
+        assert!(
+            out.lines().any(|line| line == "cat <port:1024-65535>"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_rule_colours_top_level_command() {
         let config = Config {
             rules: vec![run_rule("systemctl", vec![], vec![])],
             ..Default::default()
         };
-        let out = render_help(
-            &config,
-            &HelpOptions {
-                tree: false,
-                verbose: false,
-                colour: true,
-            },
-        );
-        assert!(
-            out.contains("\x1b[1msystemctl\x1b[0m"),
-            "command should be bold, got: {out}"
+
+        assert_eq!(
+            render_rule(&config, &config.rules[0], &colour_opts()),
+            paint(PALETTE.command, "systemctl", true)
         );
     }
 
     #[test]
-    fn test_render_colour_subcommand_green() {
-        let config = Config {
-            rules: vec![run_rule("systemctl", vec![sub("status", vec![])], vec![])],
-            ..Default::default()
-        };
-        let out = render_help(
-            &config,
-            &HelpOptions {
-                tree: false,
-                verbose: false,
-                colour: true,
-            },
-        );
-        assert!(
-            out.contains("\x1b[32mstatus\x1b[0m"),
-            "subcommand should be green, got: {out}"
+    fn test_render_subcommand_head_colours_subcommand_name() {
+        let config = Config::default();
+        assert_eq!(
+            render_subcommand_head(&config, &sub("status", vec![]), &colour_opts()),
+            paint(PALETTE.subcommand, "status", true)
         );
     }
 
