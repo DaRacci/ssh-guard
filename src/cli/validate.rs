@@ -2,8 +2,6 @@ use std::error::Error;
 
 use crate::{
     config::{Config, action::Action, rule::Rule},
-    engine::parse::parse_arg_pattern,
-    engine::types::ArgPattern,
     errors::GuardError,
 };
 
@@ -11,18 +9,13 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
     let cfg = Config::from_file(config_path)?;
     println!("Validating config: {config_path}");
 
-    let mut errors: Vec<String> = Vec::new();
-
-    validate_rules(&cfg.rules, "base", &mut errors);
+    let mut errors = cfg.validation_errors();
+    validate_run_binary_paths(&cfg.rules, "base", &mut errors);
 
     for (pname, profile) in &cfg.profiles {
         if let Some(ref rules) = profile.rules {
-            validate_rules(rules, &format!("profile '{pname}'"), &mut errors);
+            validate_run_binary_paths(rules, &format!("profile '{pname}'"), &mut errors);
         }
-    }
-
-    if let Err(e) = cfg.check_duplicate_users() {
-        errors.push(e.to_string());
     }
 
     if errors.is_empty() {
@@ -50,119 +43,35 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Every capture key the rule's args can produce, walking subcommands too.
-///
-/// Mirrors the matcher's naming: named captures and contract refs capture
-/// under their name; unnamed builtins capture positionally as `arg_N`.
-fn collect_capture_keys(args: &[String], out: &mut Vec<String>) {
-    for raw in args {
-        let pattern = parse_arg_pattern(raw);
-        let key = match &pattern {
-            ArgPattern::Template(t)
-            | ArgPattern::InlineFlag { template: t, .. }
-            | ArgPattern::TemplateContext { template: t, .. } => t.capture_key(),
-            ArgPattern::Literal(_) => None,
-        };
-        if let Some(name) = key {
-            out.push(name.to_string());
-        }
-    }
-}
-
-/// Reject file-action capture references that the rule's args can never produce.
-/// Accepts references with or without braces (`"path"` / `"{path}"`).
-fn validate_action_captures(rule: &Rule, index: usize, scope: &str, errors: &mut Vec<String>) {
-    let mut references: Vec<(&str, &str)> = match &rule.action {
-        Action::ReadFile { path_capture, .. }
-        | Action::StatPath { path_capture, .. }
-        | Action::ListDir { path_capture, .. } => {
-            vec![("path_capture", path_capture.as_str())]
-        }
-        Action::TailFile {
-            path_capture,
-            lines_capture,
-            ..
-        } => {
-            let mut refs = vec![("path_capture", path_capture.as_str())];
-            if let Some(lines) = lines_capture {
-                refs.push(("lines_capture", lines.as_str()));
-            }
-            refs
-        }
-        Action::Run { .. } | Action::ShowHelp => return,
-    };
-    references.shrink_to_fit();
-
-    let mut keys = Vec::new();
-    collect_capture_keys(&rule.args, &mut keys);
-    collect_capture_keys_recursive(&rule.subcommands, &mut keys);
-
-    for (field, reference) in references {
-        let name = reference
-            .trim()
-            .trim_start_matches('{')
-            .trim_end_matches('}');
-        if name.is_empty() {
-            continue;
-        }
-        if keys.iter().any(|k| k == name) {
-            continue;
-        }
-        let available = if keys.is_empty() {
-            "none".to_string()
-        } else {
-            keys.join(", ")
-        };
-        errors.push(format!(
-            "{scope} rule[{index}]: {field} '{reference}' does not match any capture the rule's args produce (available: {available}). Use a named capture like {{{name}:string}} in args, or a contract arg named '{name}'."
-        ));
-    }
-}
-
-fn collect_capture_keys_recursive(
-    subs: &[crate::config::subcommand::Subcommand],
-    out: &mut Vec<String>,
-) {
-    for sub in subs {
-        collect_capture_keys(&sub.args, out);
-        collect_capture_keys_recursive(&sub.subcommands, out);
-    }
-}
-
-fn validate_rules(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
-    for (i, rule) in rules.iter().enumerate() {
-        validate_action_captures(rule, i, scope, errors);
-
+fn validate_run_binary_paths(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
+    for (index, rule) in rules.iter().enumerate() {
         if let Action::Run { binary, .. } = &rule.action {
             let path = std::path::Path::new(binary);
             if !path.is_absolute() {
-                errors.push(format!(
-                    "{scope} rule[{i}]: binary '{binary}' must be an absolute path"
-                ));
                 continue;
             }
             if !path.exists() {
                 errors.push(format!(
-                    "{scope} rule[{i}]: binary '{binary}' does not exist"
+                    "{scope} rule[{index}]: binary '{binary}' does not exist"
                 ));
             } else if !rule.implicit_symlinks {
                 match std::fs::symlink_metadata(binary) {
                     Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
                         Ok(resolved) => {
                             errors.push(format!(
-                                "{scope} rule[{i}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
+                                "{scope} rule[{index}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
                                 resolved.display()
                             ));
                         }
                         Err(_) => {
                             errors.push(format!(
-                                "{scope} rule[{i}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)"
+                                "{scope} rule[{index}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)"
                             ));
                         }
                     },
-                    Err(e) => {
+                    Err(error) => {
                         errors.push(format!(
-                            "{scope} rule[{i}]: cannot stat binary '{binary}': {e}"
+                            "{scope} rule[{index}]: cannot stat binary '{binary}': {error}"
                         ));
                     }
                     _ => {}
@@ -328,6 +237,7 @@ implicit_symlinks = true
             tmp,
             r#"
 [[rules]]
+command = "help"
 action = {{ type = "show_help" }}
 "#
         )
@@ -350,10 +260,12 @@ action = {{ type = "run", binary = "{}", args = [] }}
 implicit_symlinks = true
 
 [[rules]]
-action = {{ type = "read_file", path_capture = "{{file}}", root_set = "data" }}
+command = "cat"
+action = {{ type = "read_file", path_capture = "{{file}}", root_set = "roots" }}
 args = ["{{file:string}}"]
 
 [[rules]]
+command = "help"
 action = {{ type = "show_help" }}
 "#,
             binary.display()
@@ -687,6 +599,7 @@ users = ["bob", "charlie"]
             tmp,
             r#"
 [[rules]]
+command = "help"
 action = {{ type = "show_help" }}
 
 [profiles.admin]

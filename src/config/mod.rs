@@ -11,7 +11,9 @@ pub mod subcommand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::config::{contract::Contract, global::Global, profile::Profile, rule::Rule};
+use crate::config::{
+    action::Action, contract::Contract, global::Global, profile::Profile, rule::Rule,
+};
 
 pub type FlagGroups = HashMap<String, Vec<String>>;
 pub type Contracts = HashMap<String, Contract>;
@@ -192,12 +194,75 @@ impl Config {
         merged
     }
 
+    /// Collect semantic validation errors that do not depend on host-specific binaries existing on disk.
+    #[must_use]
+    pub fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        validate_rules(
+            &self.flag_groups,
+            &self.contracts,
+            &self.rules,
+            "base",
+            &mut errors,
+        );
+
+        for (pname, profile) in &self.profiles {
+            let mut available_flag_groups = self.flag_groups.clone();
+            if let Some(profile_flag_groups) = &profile.flag_groups {
+                for (name, flags) in profile_flag_groups {
+                    available_flag_groups.insert(name.clone(), flags.clone());
+                }
+            }
+
+            let mut available_contracts = self.contracts.clone();
+            if let Some(profile_contracts) = &profile.contracts {
+                for (name, contract) in profile_contracts {
+                    available_contracts.insert(name.clone(), contract.clone());
+                }
+            }
+
+            if let Some(ref rules) = profile.rules {
+                validate_rules(
+                    &available_flag_groups,
+                    &available_contracts,
+                    rules,
+                    &format!("profile '{pname}'"),
+                    &mut errors,
+                );
+            }
+        }
+
+        if let Err(error) = self.check_duplicate_users() {
+            errors.push(error.to_string());
+        }
+
+        errors
+    }
+
+    /// Validate semantic config shape without requiring host binaries to exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GuardError` when rules, captures, root sets, or profile user assignments are invalid.
+    pub fn validate_semantics(&self) -> Result<(), crate::errors::GuardError> {
+        let errors = self.validation_errors();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::errors::GuardError::Validation(format!(
+                "{} validation error(s): {}",
+                errors.len(),
+                errors.join("; ")
+            )))
+        }
+    }
+
     /// Check for duplicate SSH usernames across all profiles.
     ///
     /// # Errors
     ///
-    /// Returns `GuardError` with duplicate user details if same username appears
-    /// in more than one profile.
+    /// Returns `GuardError` with duplicate user details if same username appears in more than one profile.
     pub fn check_duplicate_users(&self) -> Result<(), crate::errors::GuardError> {
         let mut seen: HashMap<&str, &str> = HashMap::new(); // user -> first_profile_name
         for (pname, profile) in &self.profiles {
@@ -211,6 +276,423 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+fn collect_capture_keys(patterns: &[String], out: &mut Vec<String>) {
+    use crate::engine::parse::parse_arg_pattern;
+    use crate::engine::types::ArgPattern;
+
+    for raw in patterns {
+        let pattern = parse_arg_pattern(raw);
+        let key = match &pattern {
+            ArgPattern::Template(template)
+            | ArgPattern::InlineFlag { template, .. }
+            | ArgPattern::TemplateContext { template, .. } => template.capture_key(),
+            ArgPattern::Literal(_) => None,
+        };
+        if let Some(name) = key {
+            out.push(name.to_string());
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CapturePath {
+    subcommand_path: Vec<String>,
+    capture_keys: Vec<String>,
+}
+
+fn collect_rule_capture_paths(rule: &Rule) -> Vec<CapturePath> {
+    let mut base_capture_keys = Vec::new();
+    collect_capture_keys(&rule.flags, &mut base_capture_keys);
+    collect_capture_keys(&rule.args, &mut base_capture_keys);
+
+    let mut paths = Vec::new();
+    if rule.subcommands.is_empty() || !rule.args.is_empty() {
+        paths.push(CapturePath {
+            subcommand_path: Vec::new(),
+            capture_keys: base_capture_keys.clone(),
+        });
+    }
+
+    collect_subcommand_capture_paths(
+        &rule.subcommands,
+        &Vec::new(),
+        &base_capture_keys,
+        &mut paths,
+    );
+    paths
+}
+
+fn collect_subcommand_capture_paths(
+    subcommands: &[crate::config::subcommand::Subcommand],
+    current_path: &[String],
+    current_capture_keys: &[String],
+    out: &mut Vec<CapturePath>,
+) {
+    for subcommand in subcommands {
+        let mut next_path = current_path.to_vec();
+        next_path.push(subcommand.name.clone());
+
+        let mut next_capture_keys = current_capture_keys.to_vec();
+        collect_capture_keys(&subcommand.flags, &mut next_capture_keys);
+        collect_capture_keys(&subcommand.args, &mut next_capture_keys);
+
+        out.push(CapturePath {
+            subcommand_path: next_path.clone(),
+            capture_keys: next_capture_keys.clone(),
+        });
+
+        collect_subcommand_capture_paths(
+            &subcommand.subcommands,
+            &next_path,
+            &next_capture_keys,
+            out,
+        );
+    }
+}
+
+fn capture_paths_for_prefix<'a>(
+    capture_paths: &'a [CapturePath],
+    prefix: &[String],
+) -> Vec<&'a CapturePath> {
+    capture_paths
+        .iter()
+        .filter(|path| path.subcommand_path.starts_with(prefix))
+        .collect()
+}
+
+fn format_capture_path(path: &[String]) -> String {
+    if path.is_empty() {
+        "<top-level>".to_string()
+    } else {
+        path.join(" ")
+    }
+}
+
+fn validate_action_captures(
+    rule: &Rule,
+    index: usize,
+    scope: &str,
+    capture_paths: &[CapturePath],
+    errors: &mut Vec<String>,
+) {
+    let mut references: Vec<(&str, &str)> = match &rule.action {
+        Action::ReadFile {
+            path_capture,
+            root_set,
+        }
+        | Action::StatPath {
+            path_capture,
+            root_set,
+        }
+        | Action::ListDir {
+            path_capture,
+            root_set,
+        } => {
+            validate_root_set(root_set, index, scope, errors);
+            vec![("path_capture", path_capture.as_str())]
+        }
+        Action::TailFile {
+            path_capture,
+            lines_capture,
+            root_set,
+            ..
+        } => {
+            validate_root_set(root_set, index, scope, errors);
+            let mut refs = vec![("path_capture", path_capture.as_str())];
+            if let Some(lines_capture) = lines_capture {
+                refs.push(("lines_capture", lines_capture.as_str()));
+            }
+            refs
+        }
+        Action::Run { .. } | Action::ShowHelp => return,
+    };
+    references.shrink_to_fit();
+
+    for (field, reference) in references {
+        let name = reference
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}');
+        if name.is_empty() {
+            continue;
+        }
+        for capture_path in capture_paths {
+            if capture_path.capture_keys.iter().any(|key| key == name) {
+                continue;
+            }
+            let available = if capture_path.capture_keys.is_empty() {
+                "none".to_string()
+            } else {
+                capture_path.capture_keys.join(", ")
+            };
+            let path_label = format_capture_path(&capture_path.subcommand_path);
+            errors.push(format!(
+                "{scope} rule[{index}]: {field} '{reference}' is missing capture '{name}' on path {path_label} (available: {available}). Use a named capture like {{{name}:string}} in args, or a contract arg named '{name}'."
+            ));
+        }
+    }
+}
+
+fn validate_root_set(root_set: &str, index: usize, scope: &str, errors: &mut Vec<String>) {
+    if root_set != "roots" {
+        errors.push(format!(
+            "{scope} rule[{index}]: unknown root set '{root_set}'"
+        ));
+    }
+}
+
+fn validate_flag_group_refs(
+    referenced_groups: &[String],
+    available_groups: &FlagGroups,
+    context: &str,
+    errors: &mut Vec<String>,
+) {
+    for group in referenced_groups {
+        if !available_groups.contains_key(group) {
+            errors.push(format!("{context}: unknown flag group '{group}'"));
+        }
+    }
+}
+
+fn validate_template_contracts(
+    template: &crate::engine::types::TemplateType,
+    available_contracts: &Contracts,
+    context: &str,
+    raw: &str,
+    errors: &mut Vec<String>,
+) {
+    match template {
+        crate::engine::types::TemplateType::Named { inner, .. } => {
+            validate_template_contracts(inner, available_contracts, context, raw, errors);
+        }
+        crate::engine::types::TemplateType::ContractRef(name) => {
+            if !available_contracts.contains_key(name) {
+                errors.push(format!(
+                    "{context}: unknown contract '{name}' referenced in '{raw}'"
+                ));
+            }
+        }
+        crate::engine::types::TemplateType::Union(parts) => {
+            for part in parts {
+                validate_template_contracts(part, available_contracts, context, raw, errors);
+            }
+        }
+        crate::engine::types::TemplateType::String
+        | crate::engine::types::TemplateType::Int
+        | crate::engine::types::TemplateType::Any => {}
+    }
+}
+
+fn validate_pattern_contracts(
+    patterns: &[String],
+    available_contracts: &Contracts,
+    context: &str,
+    errors: &mut Vec<String>,
+) {
+    use crate::engine::parse::parse_arg_pattern;
+    use crate::engine::types::ArgPattern;
+
+    for raw in patterns {
+        match parse_arg_pattern(raw) {
+            ArgPattern::Template(template)
+            | ArgPattern::InlineFlag { template, .. }
+            | ArgPattern::TemplateContext { template, .. } => {
+                validate_template_contracts(&template, available_contracts, context, raw, errors);
+            }
+            ArgPattern::Literal(_) => {}
+        }
+    }
+}
+
+fn validate_placeholder_refs(
+    tokens: &[String],
+    capture_paths: &[&CapturePath],
+    context: &str,
+    field: &str,
+    errors: &mut Vec<String>,
+) {
+    for token in tokens {
+        for (name, has_default) in placeholder_references(token) {
+            if has_default {
+                continue;
+            }
+            for capture_path in capture_paths {
+                if capture_path.capture_keys.iter().any(|key| key == &name) {
+                    continue;
+                }
+                let available = if capture_path.capture_keys.is_empty() {
+                    "none".to_string()
+                } else {
+                    capture_path.capture_keys.join(", ")
+                };
+                let path_label = format_capture_path(&capture_path.subcommand_path);
+                errors.push(format!(
+                    "{context}: {field} token '{token}' references missing capture '{name}' on path {path_label} (available: {available})"
+                ));
+            }
+        }
+    }
+}
+
+fn placeholder_references(token: &str) -> Vec<(String, bool)> {
+    let mut refs = Vec::new();
+    let mut chars = token.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if chars
+                .peek()
+                .is_some_and(|next| matches!(next, '{' | '}' | '\\'))
+            {
+                chars.next();
+            }
+            continue;
+        }
+
+        if ch != '{' {
+            continue;
+        }
+
+        let mut inner = String::new();
+        let mut closed = false;
+        for next in chars.by_ref() {
+            if next == '}' {
+                closed = true;
+                break;
+            }
+            inner.push(next);
+        }
+        if !closed {
+            continue;
+        }
+
+        let (name, has_default) = match inner.split_once(":-") {
+            Some((name, _default)) => (name, true),
+            None => (inner.as_str(), false),
+        };
+
+        if !name.is_empty() {
+            refs.push((name.to_string(), has_default));
+        }
+    }
+
+    refs
+}
+
+fn validate_subcommands(
+    subcommands: &[crate::config::subcommand::Subcommand],
+    available_flag_groups: &FlagGroups,
+    available_contracts: &Contracts,
+    capture_paths: &[CapturePath],
+    current_prefix: &[String],
+    context: &str,
+    errors: &mut Vec<String>,
+) {
+    for subcommand in subcommands {
+        let mut sub_prefix = current_prefix.to_vec();
+        sub_prefix.push(subcommand.name.clone());
+
+        let sub_context = format!("{context} subcommand '{}'", subcommand.name);
+        let applicable_paths = capture_paths_for_prefix(capture_paths, &sub_prefix);
+
+        validate_flag_group_refs(
+            &subcommand.flag_groups,
+            available_flag_groups,
+            &sub_context,
+            errors,
+        );
+        validate_pattern_contracts(
+            &subcommand.flags,
+            available_contracts,
+            &format!("{sub_context} flags"),
+            errors,
+        );
+        validate_pattern_contracts(
+            &subcommand.args,
+            available_contracts,
+            &format!("{sub_context} args"),
+            errors,
+        );
+        validate_placeholder_refs(
+            &subcommand.pre_args,
+            &applicable_paths,
+            &sub_context,
+            "pre_args",
+            errors,
+        );
+        validate_subcommands(
+            &subcommand.subcommands,
+            available_flag_groups,
+            available_contracts,
+            capture_paths,
+            &sub_prefix,
+            &sub_context,
+            errors,
+        );
+    }
+}
+
+fn validate_rules(
+    available_flag_groups: &FlagGroups,
+    available_contracts: &Contracts,
+    rules: &[Rule],
+    scope: &str,
+    errors: &mut Vec<String>,
+) {
+    for (index, rule) in rules.iter().enumerate() {
+        let capture_paths = collect_rule_capture_paths(rule);
+        let context = format!("{scope} rule[{index}]");
+        let all_capture_paths = capture_paths.iter().collect::<Vec<_>>();
+
+        validate_action_captures(rule, index, scope, &capture_paths, errors);
+        validate_flag_group_refs(&rule.flag_groups, available_flag_groups, &context, errors);
+        validate_pattern_contracts(
+            &rule.flags,
+            available_contracts,
+            &format!("{context} flags"),
+            errors,
+        );
+        validate_pattern_contracts(
+            &rule.args,
+            available_contracts,
+            &format!("{context} args"),
+            errors,
+        );
+        validate_placeholder_refs(
+            &rule.pre_args,
+            &all_capture_paths,
+            &context,
+            "pre_args",
+            errors,
+        );
+        validate_subcommands(
+            &rule.subcommands,
+            available_flag_groups,
+            available_contracts,
+            &capture_paths,
+            &[],
+            &context,
+            errors,
+        );
+
+        if rule.command_name().is_none() {
+            errors.push(format!(
+                "{scope} rule[{index}]: command name could not be resolved"
+            ));
+        }
+
+        if let Action::Run { binary, args, .. } = &rule.action {
+            let path = std::path::Path::new(binary);
+            if !path.is_absolute() {
+                errors.push(format!(
+                    "{scope} rule[{index}]: binary '{binary}' must be an absolute path"
+                ));
+            }
+            validate_placeholder_refs(args, &all_capture_paths, &context, "action.args", errors);
+        }
     }
 }
 
@@ -819,6 +1301,165 @@ users = ["charlie"]
         assert_eq!(dev.users, vec!["charlie"]);
         assert!(dev.global.is_none());
         assert!(dev.rules.is_none());
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_unknown_flag_group() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "journalctl"
+action = { type = "run", binary = "/opt/test/bin/journalctl", args = [] }
+flag_groups = ["missing"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("unknown flag group 'missing'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_missing_action_arg_capture() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "du"
+action = { type = "run", binary = "/opt/test/bin/du", args = ["-d{depth}"] }
+args = ["{path:string}"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("action.args token '-d{depth}'"), "got: {err}");
+        assert!(err.contains("missing capture 'depth'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_unknown_contract() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "systemctl"
+action = { type = "run", binary = "/opt/test/bin/systemctl", args = [] }
+args = ["{unit_name}"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("unknown contract 'unit_name'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_sibling_only_placeholder_capture() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "cmd"
+action = { type = "run", binary = "/opt/test/bin/cmd", args = [] }
+
+[[rules.subcommands]]
+name = "alpha"
+pre_args = ["--user", "{user}"]
+
+[[rules.subcommands]]
+name = "beta"
+args = ["{user:string}"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("subcommand 'alpha'"), "got: {err}");
+        assert!(err.contains("path alpha"), "got: {err}");
+        assert!(err.contains("missing capture 'user'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_allows_subcommand_only_capture_for_action_args() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "cmd"
+action = { type = "run", binary = "/opt/test/bin/cmd", args = ["{user}"] }
+
+[[rules.subcommands]]
+name = "beta"
+args = ["{user:string}"]
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    // Regression: a non-`Run` rule with no explicit `command` has no resolvable
+    // command name. Old `cli::validate` never checked this, so such a config
+    // validated cleanly yet matched any argv[0] at runtime and rendered empty
+    // in help output.
+    #[test]
+    fn test_validate_semantics_rejects_unresolvable_command_name() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(
+            err.contains("command name could not be resolved"),
+            "got: {err}"
+        );
+    }
+
+    // Regression: `validate_root_set` must mirror the runtime check in
+    // `actions.rs`, which rejects any `root_set` other than "roots". A config
+    // using e.g. "data" previously passed `cli::validate` and only failed when
+    // the action actually ran.
+    #[test]
+    fn test_validate_semantics_rejects_unknown_root_set() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "cat"
+action = { type = "read_file", path_capture = "{file}", root_set = "data" }
+args = ["{file:string}"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("unknown root set 'data'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_accepts_roots_root_set() {
+        let cfg: Config = toml::from_str(
+            r#"
+roots = ["/var/log"]
+
+[[rules]]
+command = "cat"
+action = { type = "read_file", path_capture = "{file}", root_set = "roots" }
+args = ["{file:string}"]
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    // A `Run` rule derives its command name from the binary filename, so no
+    // explicit `command` is required.
+    #[test]
+    fn test_validate_semantics_derives_command_name_from_binary() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+action = { type = "run", binary = "/opt/test/bin/systemctl", args = [] }
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
     }
 
     #[test]
