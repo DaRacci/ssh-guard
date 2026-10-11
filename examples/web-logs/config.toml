@@ -1,0 +1,111 @@
+roots = [
+  "/var/log/nginx",
+  "/srv/app/log",
+  "/etc/nginx",
+]
+
+[global]
+audit_log = "/var/log/ssh-guard-audit.log"
+audit_format = "json"
+help_text = """
+Read-only web/log diagnostics allowed:
+  ls <path>
+  stat <path>
+  cat <path>
+  tail [-n <lines>] <path>
+  journalctl -u nginx [-n <lines>]
+"""
+log_tag = "ssh-guard"
+max_read_bytes = 1048576
+max_tail_lines = 2000
+default_tail_lines = 200
+
+[contracts.lines]
+type = "int_range"
+min = 1
+max = 500
+
+[[rules]]
+command = "ls"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-l", "-a", "-h", "-1", "--sort={string}"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "list_dir"
+path_capture = "path"
+root_set = "roots"
+
+[[rules]]
+command = "stat"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-c={string}"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "stat_path"
+path_capture = "path"
+root_set = "roots"
+
+[[rules]]
+command = "cat"
+implicit_symlinks = true
+arg_style = "gnu_long"
+args = ["{path:string}"]
+
+[rules.action]
+type = "read_file"
+path_capture = "path"
+root_set = "roots"
+
+[[rules]]
+command = "tail"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-n={lines}", "--lines={lines}"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "tail_file"
+path_capture = "path"
+lines_capture = "lines"
+default_lines = 200
+root_set = "roots"
+
+[[rules]]
+command = "journalctl"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["--no-pager", "-q"]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/journalctl"
+args = []
+timeout = "10000ms"
+
+[[rules.subcommands]]
+name = "-u"
+flags = ["-n={lines}", "--lines={lines}", "--no-pager", "-q"]
+args = ["nginx.service"]
+
+[[rules]]
+command = "help"
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "show_help"
+
+[profiles.deploy]
+users = ["deploy"]
+roots = ["/srv/app/releases", "/srv/app/current/config"]
+
+[profiles.deploy.global]
+help_text = """
+Read-only web/log diagnostics for deploy user:
+  ls|stat|cat|tail under nginx/app paths
+  journalctl -u nginx [-n <lines>]
+"""

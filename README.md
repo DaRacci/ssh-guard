@@ -25,3 +25,4 @@ and only runs the command if it matches an allowed rule.
 - [CONFIGURATION.md](docs/CONFIG.md): How to write rules and configure ssh-guard.
 - [SECURITY.md](docs/SECURITY.md): Security considerations for deploying ssh-guard.
 - [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): Common problems and how to fix them.
+- [examples/README.md](examples/README.md): Example configs for Proxmox, systemd, web logs, PostgreSQL, and Nix hosts.

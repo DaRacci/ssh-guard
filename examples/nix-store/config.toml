@@ -1,0 +1,138 @@
+roots = [
+  "/nix/store",
+  "/nix/var/log/nix",
+  "/etc/nix",
+]
+units = ["nix-daemon.service"]
+
+[global]
+audit_log = "/var/log/ssh-guard-audit.log"
+audit_format = "json"
+help_text = """
+Read-only Nix diagnostics allowed:
+  nix path-info [--json] [--closure-size] <installable>
+  nix-store --query --requisites|--references|--tree <store-path>
+  journalctl -u nix-daemon [-n <lines>]
+  ls|cat|tail under /nix/var/log/nix and /etc/nix
+"""
+log_tag = "ssh-guard"
+max_read_bytes = 1048576
+max_tail_lines = 5000
+default_tail_lines = 200
+
+[contracts.lines]
+type = "int_range"
+min = 1
+max = 300
+
+[contracts.store_path]
+type = "string_len"
+min = 12
+max = 255
+
+[[rules]]
+command = "nix"
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "run"
+binary = "/run/current-system/sw/bin/nix"
+args = []
+timeout = "20000ms"
+
+[[rules.subcommands]]
+name = "path-info"
+flags = ["--json", "--closure-size", "--size", "--recursive"]
+args = ["{string}"]
+
+[[rules]]
+command = "nix-store"
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "run"
+binary = "/nix/var/nix/profiles/default/bin/nix-store"
+args = []
+timeout = "20000ms"
+
+[[rules.subcommands]]
+name = "--query"
+flags = ["--requisites", "--references", "--referrers", "--tree", "--size"]
+args = ["{store_path}"]
+
+[[rules]]
+command = "journalctl"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["--no-pager", "-q"]
+
+[rules.action]
+type = "run"
+binary = "/run/current-system/sw/bin/journalctl"
+args = []
+timeout = "10000ms"
+
+[[rules.subcommands]]
+name = "-u"
+flags = ["-n={lines}", "--lines={lines}", "--no-pager", "-q"]
+args = ["nix-daemon.service"]
+
+[[rules]]
+command = "ls"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-l", "-a", "-h", "-1"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "list_dir"
+path_capture = "path"
+root_set = "roots"
+
+[[rules]]
+command = "cat"
+implicit_symlinks = true
+arg_style = "gnu_long"
+args = ["{path:string}"]
+
+[rules.action]
+type = "read_file"
+path_capture = "path"
+root_set = "roots"
+
+[[rules]]
+command = "tail"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-n={lines}", "--lines={lines}"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "tail_file"
+path_capture = "path"
+lines_capture = "lines"
+default_lines = 200
+root_set = "roots"
+
+[[rules]]
+command = "help"
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "show_help"
+
+[profiles.builder]
+users = ["builder"]
+roots = ["/nix/var/nix/profiles"]
+
+[profiles.builder.global]
+help_text = """
+Read-only Nix diagnostics for builder profile:
+  nix path-info <installable>
+  nix-store --query ... <store-path>
+  journalctl -u nix-daemon [-n <lines>]
+  ls|cat|tail under nix logs, config, and profiles
+"""

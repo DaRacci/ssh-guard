@@ -1,0 +1,150 @@
+units = ["postgresql.service"]
+
+[global]
+audit_log = "/var/log/ssh-guard-audit.log"
+audit_format = "logfmt"
+help_text = """
+Read-only PostgreSQL diagnostics allowed:
+  systemctl status postgresql
+  journalctl -u postgresql [-n <lines>]
+  pg_isready [-h <host>] [-p <port>] [-d <database>]
+  pg-activity
+  pg-db-size
+  pg-replication
+"""
+log_tag = "ssh-guard"
+max_read_bytes = 1048576
+max_tail_lines = 5000
+default_tail_lines = 200
+
+[contracts.port]
+type = "int_range"
+min = 1
+max = 65535
+
+[contracts.lines]
+type = "int_range"
+min = 1
+max = 200
+
+[contracts.database]
+type = "string_len"
+min = 1
+max = 63
+
+[[rules]]
+command = "systemctl"
+implicit_symlinks = true
+arg_style = "gnu_long"
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/systemctl"
+args = []
+timeout = "10000ms"
+
+[[rules.subcommands]]
+name = "status"
+flags = ["--no-pager", "--full"]
+args = ["postgresql.service"]
+
+[[rules]]
+command = "journalctl"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["--no-pager", "-q"]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/journalctl"
+args = []
+timeout = "10000ms"
+
+[[rules.subcommands]]
+name = "-u"
+flags = ["-n={lines}", "--lines={lines}", "--no-pager", "-q"]
+args = ["postgresql.service"]
+
+[[rules]]
+command = "pg_isready"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-h={string}", "-p={port}", "-d={database}"]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/pg_isready"
+args = []
+timeout = "5000ms"
+
+[[rules]]
+command = "pg-activity"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = [
+  "-XtAc",
+  "select pid, usename, state, wait_event_type, query_start from pg_stat_activity order by query_start desc limit 20;",
+]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/psql"
+args = ["-X"]
+timeout = "15000ms"
+
+[[rules]]
+command = "pg-db-size"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = [
+  "-XtAc",
+  "select datname, pg_size_pretty(pg_database_size(datname)) from pg_database order by pg_database_size(datname) desc;",
+]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/psql"
+args = ["-X"]
+timeout = "15000ms"
+
+[[rules]]
+command = "pg-replication"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = [
+  "-XtAc",
+  "select application_name, state, sync_state, write_lag, flush_lag, replay_lag from pg_stat_replication order by application_name;",
+]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/psql"
+args = ["-X"]
+timeout = "15000ms"
+
+[profiles.dba]
+users = ["postgres", "dba"]
+
+[profiles.dba.global]
+help_text = """
+Read-only PostgreSQL diagnostics for DBA profile:
+  systemctl status postgresql
+  journalctl -u postgresql [-n <lines>]
+  pg_isready [-h <host>] [-p <port>] [-d <database>]
+  pg-activity | pg-db-size | pg-replication | pg-settings
+"""
+
+[[profiles.dba.rules]]
+command = "pg-settings"
+implicit_symlinks = true
+arg_style = "gnu_long"
+pre_args = [
+  "-XtAc",
+  "select name, setting, unit from pg_settings order by name;",
+]
+
+[profiles.dba.rules.action]
+type = "run"
+binary = "/usr/bin/psql"
+args = ["-X"]
+timeout = "15000ms"
