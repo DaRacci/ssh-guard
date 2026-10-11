@@ -348,5 +348,4 @@ Generated help now starts with a legend, then a `Value details:` block for place
 - the legend identifies commands, subcommands, fixed literals, optional flags, and placeholders
 - when colour is disabled or unsupported, optional flags fall back to bracketed forms like `[--since]` and `[-n=<int>]`, while placeholders stay angle-bracketed
 - placeholders such as `<unit>` or `<port>` get an explanation line showing enum values, integer ranges, and literal prefixes/suffixes
-
-`show_help` rules are skipped. `read_file` / `tail_file` / `stat_path` / `list_dir` rules are shown, since they are allowed inputs.
+- a trailing `Allowed roots:` section lists every configured root set that bounds file/path actions. With only the default `roots` set the paths are listed flat; once a named `[root_sets]` entry exists, sets are labelled with the default `roots` first, then named sets alphabetically.

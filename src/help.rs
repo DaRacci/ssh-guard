@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::config::Config;
+use crate::config::DEFAULT_ROOT_SET;
 use crate::config::action::Action;
 use crate::config::contract::Contract;
 use crate::config::rule::Rule;
@@ -175,8 +176,54 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
         }
     }
 
+    lines.extend(render_roots(config, opts));
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Filesystem root sets that bound file/path actions, rendered when any are set.
+///
+/// With only the default `roots` set the paths are listed flat.
+/// Once a named `[root_sets]` entry exists, every set is listed under its name.
+fn render_roots(config: &Config, opts: &HelpOptions) -> Vec<String> {
+    if config.roots.is_empty() && config.root_sets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![String::new(), "Allowed roots:".to_string(), String::new()];
+
+    if config.root_sets.is_empty() {
+        for root in &config.roots {
+            lines.push(format!("  {}", paint(PALETTE.literal, root, opts.colour)));
+        }
+        return lines;
+    }
+
+    render_root_set(&mut lines, DEFAULT_ROOT_SET, &config.roots, opts);
+
+    let mut names: Vec<&String> = config.root_sets.keys().collect();
+    names.sort();
+    for name in names {
+        if let Some(paths) = config.root_sets.get(name) {
+            render_root_set(&mut lines, name, paths, opts);
+        }
+    }
+    lines
+}
+
+/// Render one root set as a labelled group, skipping sets with no paths.
+fn render_root_set(lines: &mut Vec<String>, name: &str, paths: &[String], opts: &HelpOptions) {
+    if paths.is_empty() {
+        return;
+    }
+
+    lines.push(format!(
+        "  {}:",
+        paint(PALETTE.subcommand, name, opts.colour)
+    ));
+    for path in paths {
+        lines.push(format!("    {}", paint(PALETTE.literal, path, opts.colour)));
+    }
 }
 
 fn render_legend(opts: &HelpOptions) -> Vec<String> {
@@ -806,6 +853,146 @@ mod tests {
         let config = Config::default();
         let out = render_help(&config, &HelpOptions::default());
         assert!(out.contains("Allowed commands"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_includes_allowed_roots() {
+        let config = Config {
+            rules: vec![run_rule("cat", vec![], vec!["{path:string}".into()])],
+            roots: vec!["/var/log".into(), "/etc/nginx".into()],
+            ..Default::default()
+        };
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(out.contains("Allowed roots:"), "got: {out}");
+        assert!(out.contains("/var/log"), "got: {out}");
+        assert!(out.contains("/etc/nginx"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_roots_flat_when_no_named_sets() {
+        let config = Config {
+            roots: vec!["/var/log".into(), "/etc/nginx".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            render_roots(&config, &HelpOptions::default()),
+            vec![
+                String::new(),
+                "Allowed roots:".into(),
+                String::new(),
+                "  /var/log".into(),
+                "  /etc/nginx".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_includes_named_root_sets() {
+        let mut config = Config {
+            rules: vec![run_rule("cat", vec![], vec!["{path:string}".into()])],
+            roots: vec!["/var/log".into()],
+            ..Default::default()
+        };
+        config
+            .root_sets
+            .insert("app".into(), vec!["/srv/app".into()]);
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(out.contains("Allowed roots:"), "got: {out}");
+        assert!(out.contains("\n  roots:"), "got: {out}");
+        assert!(out.contains("\n  app:"), "got: {out}");
+        assert!(out.contains("/srv/app"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_roots_when_only_named_sets() {
+        let mut config = Config::default();
+        config
+            .root_sets
+            .insert("app".into(), vec!["/srv/app".into()]);
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(out.contains("Allowed roots:"), "got: {out}");
+        assert!(out.contains("\n  app:"), "got: {out}");
+        assert!(out.contains("/srv/app"), "got: {out}");
+        assert!(
+            !out.contains("\n  roots:"),
+            "empty default set should be omitted, got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_root_sets_sorted_by_name() {
+        let mut config = Config::default();
+        config.root_sets.insert("zeta".into(), vec!["/z".into()]);
+        config.root_sets.insert("alpha".into(), vec!["/a".into()]);
+        let out = render_help(&config, &HelpOptions::default());
+        let alpha = out.find("\n  alpha:").expect("alpha set missing");
+        let zeta = out.find("\n  zeta:").expect("zeta set missing");
+        assert!(alpha < zeta, "expected alpha before zeta, got: {out}");
+    }
+
+    #[test]
+    fn test_render_colour_root_set_name_uses_subcommand_palette() {
+        let mut config = Config::default();
+        config
+            .root_sets
+            .insert("app".into(), vec!["/srv/app".into()]);
+        let out = render_help(
+            &config,
+            &HelpOptions {
+                tree: false,
+                verbose: false,
+                colour: true,
+            },
+        );
+        assert!(out.contains("\x1b[32mapp\x1b[0m:"), "got: {out}");
+    }
+
+    #[test]
+    fn test_render_omits_allowed_roots_when_empty() {
+        let config = Config {
+            rules: vec![run_rule("systemctl", vec![], vec![])],
+            roots: vec![],
+            ..Default::default()
+        };
+        let out = render_help(&config, &HelpOptions::default());
+        assert!(
+            !out.contains("Allowed roots"),
+            "roots section should be omitted when empty, got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_roots_section_after_commands() {
+        let config = Config {
+            rules: vec![run_rule("cat", vec![], vec!["{path:string}".into()])],
+            roots: vec!["/var/log".into()],
+            ..Default::default()
+        };
+        let out = render_help(&config, &HelpOptions::default());
+        let commands_idx = out.find("Allowed commands:");
+        let roots_idx = out.find("Allowed roots:");
+        assert!(
+            matches!((commands_idx, roots_idx), (Some(cmd), Some(roots)) if cmd < roots),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_render_colour_roots_uses_literal_palette() {
+        let config = Config {
+            rules: vec![run_rule("cat", vec![], vec!["{path:string}".into()])],
+            roots: vec!["/var/log".into()],
+            ..Default::default()
+        };
+        let out = render_help(
+            &config,
+            &HelpOptions {
+                tree: false,
+                verbose: false,
+                colour: true,
+            },
+        );
+        assert!(out.contains("\x1b[36m/var/log\x1b[0m"), "got: {out}");
     }
 
     #[test]
