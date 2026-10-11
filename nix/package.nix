@@ -27,10 +27,14 @@ customRustPlatform.buildRustPackage {
       ../Cargo.toml
       ../Cargo.lock
       ../tests
+      ../benches
+      ../examples
     ];
   };
 
-  cargoHash = "sha256-XvgFyA1I8qfG1WU2ELRZ2Dn1ZXsoafBSu1uCMlw0Nwo=";
+  cargoLock = {
+    lockFile = ../Cargo.lock;
+  };
 
   meta = {
     description = "Restricted SSH command guard";
