@@ -29,8 +29,7 @@ pub fn execute_argv_for_test(
 ///
 /// # Errors
 ///
-/// Returns `GuardError` when action execution fails, required captures are missing,
-/// or the rule contains an unsupported action payload.
+/// Returns `GuardError` when action execution fails or required captures are missing.
 #[allow(clippy::implicit_hasher)]
 pub fn execute(
     config: &Config,

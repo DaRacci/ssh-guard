@@ -13,7 +13,6 @@ use crate::kinds::{EnvCtx, ExecCtx, RuleKind};
 
 pub(super) struct Run<'a> {
     pub(super) binary: &'a str,
-    pub(super) args: &'a [String],
     pub(super) timeout: &'a Duration,
 }
 
@@ -69,7 +68,6 @@ impl RuleKind for Run<'_> {
     }
 
     fn execute(&self, ctx: &ExecCtx<'_>) -> Result<i32, GuardError> {
-        let _ = self.args;
         let argv = build_argv(ctx.rule, ctx.subcommand_path, ctx.user_argv, ctx.captures)?;
         action_run(self.binary, &argv, ctx.rule.implicit_symlinks, self.timeout)
     }
@@ -935,17 +933,13 @@ mod tests {
         };
         let Action::Run {
             binary,
-            args,
+            args: _,
             timeout,
         } = &rule.action
         else {
             panic!("expected Run action");
         };
-        let kind = Run {
-            binary,
-            args,
-            timeout,
-        };
+        let kind = Run { binary, timeout };
         let captures = HashMap::new();
         let ctx = ExecCtx {
             config: &config,

@@ -21,15 +21,14 @@ pub(crate) struct ExecCtx<'a> {
     pub(crate) user_argv: &'a [String],
 }
 
-#[allow(dead_code)]
 pub(crate) struct EnvCtx<'a> {
     pub(crate) rule: &'a Rule,
     pub(crate) scope: &'a str,
     pub(crate) index: usize,
 }
 
-#[allow(dead_code)]
 pub(crate) trait RuleKind: Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
 
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
@@ -53,13 +52,9 @@ pub(crate) fn kind_for(action: &Action) -> Box<dyn RuleKind + '_> {
     match action {
         Action::Run {
             binary,
-            args,
+            args: _,
             timeout,
-        } => Box::new(run::Run {
-            binary,
-            args,
-            timeout,
-        }),
+        } => Box::new(run::Run { binary, timeout }),
         Action::ReadFile {
             path_capture,
             root_set,

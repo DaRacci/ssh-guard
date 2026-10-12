@@ -8,7 +8,6 @@ use crate::errors::GuardError;
 use crate::kinds::support::{lookup_capture, resolve_named_root_set, resolve_within_roots};
 use crate::kinds::{ExecCtx, RuleKind};
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct TailFile<'a> {
     pub(super) path_capture: &'a str,
     pub(super) lines_capture: Option<&'a str>,
