@@ -240,6 +240,7 @@ fn action_run(
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use crate::config::arg::ArgStyle;
     use std::collections::HashMap;
