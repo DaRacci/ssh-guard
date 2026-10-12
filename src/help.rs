@@ -68,6 +68,16 @@ fn template_label(
                         format!("{name}:{min}..{max} chars")
                     }
                     Some(Contract::Enum { values }) => format!("{name}: {}", values.join("|")),
+                    Some(Contract::Path {
+                        root_set,
+                        must_exist,
+                    }) => {
+                        if *must_exist {
+                            format!("{name}: path in {root_set}")
+                        } else {
+                            format!("{name}: path in {root_set} (may be missing)")
+                        }
+                    }
                     None => name.clone(),
                 }
             }
@@ -97,6 +107,16 @@ fn template_label(
                         format!("<{name}:{min}..{max} chars>")
                     }
                     Some(Contract::Enum { values }) => format!("<{name}: {}>", values.join("|")),
+                    Some(Contract::Path {
+                        root_set,
+                        must_exist,
+                    }) => {
+                        if *must_exist {
+                            format!("<{name}: path in {root_set}>")
+                        } else {
+                            format!("<{name}: path in {root_set} (may be missing)>")
+                        }
+                    }
                     None => format!("<{name}>"),
                 }
             } else {
@@ -427,6 +447,16 @@ fn describe_template(template: &TemplateType, contracts: &HashMap<String, Contra
             Some(Contract::IntRange { min, max }) => format!("integer {min}..{max}"),
             Some(Contract::StringLen { min, max }) => format!("text {min}..{max} chars"),
             Some(Contract::Enum { values }) => format!("one of: {}", values.join(" | ")),
+            Some(Contract::Path {
+                root_set,
+                must_exist,
+            }) => {
+                if *must_exist {
+                    format!("path within root set '{root_set}'")
+                } else {
+                    format!("path within root set '{root_set}' (may be missing)")
+                }
+            }
             None => format!("value matching contract '{name}'"),
         },
         TemplateType::Named { inner, .. } => describe_template(inner, contracts),

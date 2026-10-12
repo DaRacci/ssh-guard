@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-
 use super::types::TemplateType;
+use crate::config::Config;
 use crate::config::contract::Contract;
+use crate::path_security::ensure_path_in_roots;
 
 pub(crate) fn validate_template_value(
     value: &str,
     template: &TemplateType,
-    contracts: &HashMap<String, Contract>,
+    config: &Config,
 ) -> Result<(), String> {
     match template {
-        TemplateType::Named { inner, .. } => validate_template_value(value, inner, contracts),
+        TemplateType::Named { inner, .. } => validate_template_value(value, inner, config),
         TemplateType::String => {
             if value.is_empty() {
                 return Err("empty string not allowed".into());
@@ -22,7 +22,8 @@ pub(crate) fn validate_template_value(
             .map(|_| ()),
         TemplateType::Any => Ok(()),
         TemplateType::ContractRef(name) => {
-            let ct = contracts
+            let ct = config
+                .contracts
                 .get(name)
                 .ok_or_else(|| format!("unknown contract '{name}'"))?;
             match ct {
@@ -55,12 +56,22 @@ pub(crate) fn validate_template_value(
                     }
                     Ok(())
                 }
+                Contract::Path {
+                    root_set,
+                    must_exist,
+                } => {
+                    let roots = config.root_set_paths(root_set).ok_or_else(|| {
+                        format!("unknown root set '{root_set}' for contract '{name}'")
+                    })?;
+                    ensure_path_in_roots(std::path::Path::new(value), roots, *must_exist)
+                        .map_err(|reason| format!("{reason} for contract '{name}'"))
+                }
             }
         }
         TemplateType::Union(types) => {
             let mut errors = vec![];
             for t in types {
-                match validate_template_value(value, t, contracts) {
+                match validate_template_value(value, t, config) {
                     Ok(()) => return Ok(()),
                     Err(e) => errors.push(e),
                 }
@@ -77,67 +88,73 @@ pub(crate) fn validate_template_value(
 mod tests {
     use super::*;
     use crate::config::contract::Contract;
-    use std::collections::HashMap;
+    use crate::config::{Config, Contracts};
+
+    fn config_with_contracts(contracts: Contracts) -> Config {
+        Config {
+            contracts,
+            ..Config::default()
+        }
+    }
 
     #[test]
     fn test_validate_int_ok() {
-        let contracts = HashMap::new();
-        assert!(validate_template_value("42", &TemplateType::Int, &contracts).is_ok());
+        let config = Config::default();
+        assert!(validate_template_value("42", &TemplateType::Int, &config).is_ok());
     }
 
     #[test]
     fn test_validate_int_fail() {
-        let contracts = HashMap::new();
-        assert!(validate_template_value("abc", &TemplateType::Int, &contracts).is_err());
+        let config = Config::default();
+        assert!(validate_template_value("abc", &TemplateType::Int, &config).is_err());
     }
 
     #[test]
     fn test_validate_union_ok() {
-        let contracts = HashMap::new();
+        let config = Config::default();
         let union = TemplateType::Union(vec![TemplateType::Int, TemplateType::String]);
-        assert!(validate_template_value("42", &union, &contracts).is_ok());
-        assert!(validate_template_value("hello", &union, &contracts).is_ok());
+        assert!(validate_template_value("42", &union, &config).is_ok());
+        assert!(validate_template_value("hello", &union, &config).is_ok());
     }
 
     #[test]
     fn test_validate_union_fail() {
-        let contracts = HashMap::new();
+        let config = Config::default();
         let union = TemplateType::Union(vec![TemplateType::Int]);
-        assert!(validate_template_value("hello", &union, &contracts).is_err());
+        assert!(validate_template_value("hello", &union, &config).is_err());
     }
 
     #[test]
     fn test_validate_stringlen_contract_ok() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert("mystr".into(), Contract::StringLen { min: 3, max: 10 });
+        let config = config_with_contracts(contracts);
         assert!(
-            validate_template_value(
-                "hello",
-                &TemplateType::ContractRef("mystr".into()),
-                &contracts
-            )
-            .is_ok()
+            validate_template_value("hello", &TemplateType::ContractRef("mystr".into()), &config)
+                .is_ok()
         );
     }
 
     #[test]
     fn test_validate_stringlen_contract_too_short() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert("mystr".into(), Contract::StringLen { min: 3, max: 10 });
+        let config = config_with_contracts(contracts);
         let result =
-            validate_template_value("ab", &TemplateType::ContractRef("mystr".into()), &contracts);
+            validate_template_value("ab", &TemplateType::ContractRef("mystr".into()), &config);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("length"));
     }
 
     #[test]
     fn test_validate_stringlen_contract_too_long() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert("mystr".into(), Contract::StringLen { min: 3, max: 10 });
+        let config = config_with_contracts(contracts);
         let result = validate_template_value(
             "toolongvalue",
             &TemplateType::ContractRef("mystr".into()),
-            &contracts,
+            &config,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("length"));
@@ -145,11 +162,11 @@ mod tests {
 
     #[test]
     fn test_validate_contract_ref_unknown() {
-        let contracts = HashMap::new();
+        let config = Config::default();
         let result = validate_template_value(
             "anything",
             &TemplateType::ContractRef("nonexistent".into()),
-            &contracts,
+            &config,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown contract"));
@@ -157,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_contract_int_range_boundary() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert(
             "port".into(),
             Contract::IntRange {
@@ -165,27 +182,20 @@ mod tests {
                 max: 65535,
             },
         );
+        let config = config_with_contracts(contracts);
         assert!(
-            validate_template_value(
-                "1024",
-                &TemplateType::ContractRef("port".into()),
-                &contracts
-            )
-            .is_ok()
+            validate_template_value("1024", &TemplateType::ContractRef("port".into()), &config)
+                .is_ok()
         );
         assert!(
-            validate_template_value(
-                "65535",
-                &TemplateType::ContractRef("port".into()),
-                &contracts
-            )
-            .is_ok()
+            validate_template_value("65535", &TemplateType::ContractRef("port".into()), &config)
+                .is_ok()
         );
     }
 
     #[test]
     fn test_contract_int_range_just_outside() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert(
             "port".into(),
             Contract::IntRange {
@@ -193,34 +203,27 @@ mod tests {
                 max: 65535,
             },
         );
+        let config = config_with_contracts(contracts);
         assert!(
-            validate_template_value(
-                "1023",
-                &TemplateType::ContractRef("port".into()),
-                &contracts
-            )
-            .is_err()
+            validate_template_value("1023", &TemplateType::ContractRef("port".into()), &config)
+                .is_err()
         );
         assert!(
-            validate_template_value(
-                "65536",
-                &TemplateType::ContractRef("port".into()),
-                &contracts
-            )
-            .is_err()
+            validate_template_value("65536", &TemplateType::ContractRef("port".into()), &config)
+                .is_err()
         );
     }
 
     #[test]
     fn test_validate_string_empty() {
-        let contracts = HashMap::new();
-        assert!(validate_template_value("", &TemplateType::String, &contracts).is_err());
-        assert!(validate_template_value("a", &TemplateType::String, &contracts).is_ok());
+        let config = Config::default();
+        assert!(validate_template_value("", &TemplateType::String, &config).is_err());
+        assert!(validate_template_value("a", &TemplateType::String, &config).is_ok());
     }
 
     #[test]
     fn test_contract_int_range_parse_error() {
-        let mut contracts = HashMap::new();
+        let mut contracts = Contracts::new();
         contracts.insert(
             "port".into(),
             Contract::IntRange {
@@ -228,8 +231,9 @@ mod tests {
                 max: 65535,
             },
         );
+        let config = config_with_contracts(contracts);
         let result =
-            validate_template_value("abc", &TemplateType::ContractRef("port".into()), &contracts);
+            validate_template_value("abc", &TemplateType::ContractRef("port".into()), &config);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("not a valid integer"));

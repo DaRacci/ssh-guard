@@ -71,7 +71,7 @@ struct MatchState {
 struct LevelCtx<'a> {
     rule: &'a Rule,
     config: &'a Config,
-    flags: Vec<String>,
+    flag_patterns: Vec<ArgPattern>,
     patterns: Vec<ArgPattern>,
     subcommands: &'a [Subcommand],
     style: &'a ArgStyle,
@@ -81,10 +81,11 @@ struct LevelCtx<'a> {
 
 impl<'a> LevelCtx<'a> {
     fn for_rule(rule: &'a Rule, config: &'a Config) -> LevelCtx<'a> {
+        let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
         LevelCtx {
             rule,
             config,
-            flags: expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags),
+            flag_patterns: flags.iter().map(|flag| parse_arg_pattern(flag)).collect(),
             patterns: rule.args.iter().map(|a| parse_arg_pattern(a)).collect(),
             subcommands: &rule.subcommands,
             style: &rule.arg_style,
@@ -96,10 +97,11 @@ impl<'a> LevelCtx<'a> {
     fn for_sub(parent: &LevelCtx<'a>, sub: &'a Subcommand) -> LevelCtx<'a> {
         let mut path = parent.path.clone();
         path.push(sub.name.clone());
+        let flags = expand_flags(&parent.config.flag_groups, &sub.flag_groups, &sub.flags);
         LevelCtx {
             rule: parent.rule,
             config: parent.config,
-            flags: expand_flags(&parent.config.flag_groups, &sub.flag_groups, &sub.flags),
+            flag_patterns: flags.iter().map(|flag| parse_arg_pattern(flag)).collect(),
             patterns: sub.args.iter().map(|a| parse_arg_pattern(a)).collect(),
             subcommands: &sub.subcommands,
             style: effective_style(parent.rule, Some(sub)),
@@ -129,6 +131,233 @@ fn fail_reason(ctx: &LevelCtx) -> &'static str {
     } else {
         "not in allowed args"
     }
+}
+
+fn capture_and_recurse(
+    ctx: &LevelCtx,
+    rule_idx: usize,
+    argv: &[String],
+    next_pos: usize,
+    pos: usize,
+    token: &str,
+    value: &str,
+    template: &TemplateType,
+    state: &MatchState,
+    failures: &mut Vec<MatchFailure>,
+    counts_as_arg_or_sub: bool,
+) -> Option<MatchState> {
+    let mut next = state.clone();
+    if counts_as_arg_or_sub {
+        next.consumed_arg_or_sub = true;
+    }
+    let cap_name = capture_name(template, &mut next.arg_counter);
+    if let Err(reason) = validate_template_value(value, template, ctx.config) {
+        record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
+        next.had_validation_error = true;
+    }
+    next.captures.insert(cap_name, value.to_string());
+    match_level(ctx, rule_idx, argv, next_pos, next, failures).ok()
+}
+
+fn context_value<'a>(
+    token: &'a str,
+    prefix: Option<&str>,
+    suffix: Option<&str>,
+) -> Option<&'a str> {
+    let works =
+        prefix.is_none_or(|p| token.starts_with(p)) && suffix.is_none_or(|s| token.ends_with(s));
+    if !works {
+        return None;
+    }
+
+    let base_start = prefix.map_or(0, str::len);
+    let base_end = token.len() - suffix.map_or(0, str::len);
+    if base_start < base_end {
+        Some(&token[base_start..base_end])
+    } else {
+        None
+    }
+}
+
+fn separate_value_flag(
+    prefix: Option<&str>,
+    suffix: Option<&str>,
+    style: &ArgStyle,
+) -> Option<String> {
+    if suffix.is_some() {
+        return None;
+    }
+
+    let prefix = prefix?;
+    prefix
+        .strip_suffix(sep_for(style))
+        .map(std::string::ToString::to_string)
+}
+
+fn try_pattern(
+    pattern: &ArgPattern,
+    ctx: &LevelCtx,
+    rule_idx: usize,
+    argv: &[String],
+    pos: usize,
+    state: &MatchState,
+    failures: &mut Vec<MatchFailure>,
+    counts_as_arg_or_sub: bool,
+    greedy_literal_value: bool,
+) -> Option<MatchState> {
+    let token = &argv[pos];
+
+    match pattern {
+        ArgPattern::Literal(lit) => {
+            let opaque_prefix = format!("{lit}{}", sep_for(ctx.style));
+            if token != lit {
+                if greedy_literal_value
+                    && is_flag_like(token, ctx.style)
+                    && token.starts_with(opaque_prefix.as_str())
+                {
+                    return match_level(ctx, rule_idx, argv, pos + 1, state.clone(), failures).ok();
+                }
+                return None;
+            }
+
+            let next = state.clone();
+            if greedy_literal_value
+                && pos + 1 < argv.len()
+                && !is_flag_like(&argv[pos + 1], ctx.style)
+                && let Ok(done) = match_level(ctx, rule_idx, argv, pos + 2, next.clone(), failures)
+            {
+                return Some(done);
+            }
+            match_level(ctx, rule_idx, argv, pos + 1, next, failures).ok()
+        }
+        ArgPattern::InlineFlag { flag, template } => {
+            let prefix = format!("{flag}{}", sep_for(ctx.style));
+            if let Some(value) = token.strip_prefix(prefix.as_str()) {
+                return capture_and_recurse(
+                    ctx,
+                    rule_idx,
+                    argv,
+                    pos + 1,
+                    pos,
+                    token,
+                    value,
+                    template,
+                    state,
+                    failures,
+                    counts_as_arg_or_sub,
+                );
+            }
+            if token == flag && pos + 1 < argv.len() && !is_flag_like(&argv[pos + 1], ctx.style) {
+                return capture_and_recurse(
+                    ctx,
+                    rule_idx,
+                    argv,
+                    pos + 2,
+                    pos,
+                    token,
+                    &argv[pos + 1],
+                    template,
+                    state,
+                    failures,
+                    counts_as_arg_or_sub,
+                );
+            }
+            None
+        }
+        ArgPattern::Template(template) => {
+            if is_flag_like(token, ctx.style) {
+                return None;
+            }
+            capture_and_recurse(
+                ctx,
+                rule_idx,
+                argv,
+                pos + 1,
+                pos,
+                token,
+                token,
+                template,
+                state,
+                failures,
+                counts_as_arg_or_sub,
+            )
+        }
+        ArgPattern::TemplateContext {
+            prefix,
+            template,
+            suffix,
+        } => {
+            if let Some(value) = context_value(token, prefix.as_deref(), suffix.as_deref()) {
+                return capture_and_recurse(
+                    ctx,
+                    rule_idx,
+                    argv,
+                    pos + 1,
+                    pos,
+                    token,
+                    value,
+                    template,
+                    state,
+                    failures,
+                    counts_as_arg_or_sub,
+                );
+            }
+
+            if let Some(flag) = separate_value_flag(prefix.as_deref(), suffix.as_deref(), ctx.style)
+                && token == &flag
+                && pos + 1 < argv.len()
+                && !is_flag_like(&argv[pos + 1], ctx.style)
+            {
+                return capture_and_recurse(
+                    ctx,
+                    rule_idx,
+                    argv,
+                    pos + 2,
+                    pos,
+                    token,
+                    &argv[pos + 1],
+                    template,
+                    state,
+                    failures,
+                    counts_as_arg_or_sub,
+                );
+            }
+            None
+        }
+    }
+}
+
+fn try_flag_patterns(
+    ctx: &LevelCtx,
+    rule_idx: usize,
+    argv: &[String],
+    pos: usize,
+    state: &MatchState,
+    failures: &mut Vec<MatchFailure>,
+) -> Option<MatchState> {
+    for pattern in &ctx.flag_patterns {
+        if matches!(pattern, ArgPattern::Literal(_)) {
+            continue;
+        }
+        if let Some(next) = try_pattern(
+            pattern, ctx, rule_idx, argv, pos, state, failures, false, false,
+        ) {
+            return Some(next);
+        }
+    }
+
+    for pattern in &ctx.flag_patterns {
+        if !matches!(pattern, ArgPattern::Literal(_)) {
+            continue;
+        }
+        if let Some(next) = try_pattern(
+            pattern, ctx, rule_idx, argv, pos, state, failures, false, true,
+        ) {
+            return Some(next);
+        }
+    }
+
+    None
 }
 
 pub(crate) fn try_match_rule(
@@ -244,31 +473,11 @@ fn match_level(
     }
     let token = &argv[pos];
 
-    // Exact allowlisted flag with token shape
-    if ctx.flags.iter().any(|f| f == token) {
-        // Greedy "flag value" consumption first then standalone
-        if pos + 1 < argv.len()
-            && !is_flag_like(&argv[pos + 1], ctx.style)
-            && let Ok(next) = match_level(ctx, rule_idx, argv, pos + 2, state.clone(), failures)
-        {
-            return Ok(next);
-        }
-        if let Ok(next) = match_level(ctx, rule_idx, argv, pos + 1, state.clone(), failures) {
-            return Ok(next);
-        }
-        // Fall through, the token may also be matched by an arg pattern
+    if let Some(next) = try_flag_patterns(ctx, rule_idx, argv, pos, &state, failures) {
+        return Ok(next);
     }
 
     if is_flag_like(token, ctx.style) {
-        // Inline value form
-        let sep = sep_for(ctx.style);
-        if let Some(sep_pos) = token.find(sep)
-            && ctx.flags.iter().any(|f| *f == token[..sep_pos])
-            && let Ok(next) = match_level(ctx, rule_idx, argv, pos + 1, state.clone(), failures)
-        {
-            return Ok(next);
-        }
-
         if let Some(next) = try_arg_patterns(ctx, rule_idx, argv, pos, &state, failures) {
             return Ok(next);
         }
@@ -317,85 +526,11 @@ fn try_arg_patterns(
     state: &MatchState,
     failures: &mut Vec<MatchFailure>,
 ) -> Option<MatchState> {
-    let token = &argv[pos];
-
     for pattern in &ctx.patterns {
-        match pattern {
-            ArgPattern::Literal(lit) => {
-                if token == lit {
-                    let mut next = state.clone();
-                    next.consumed_arg_or_sub = true;
-                    if let Ok(done) = match_level(ctx, rule_idx, argv, pos + 1, next, failures) {
-                        return Some(done);
-                    }
-                }
-            }
-            ArgPattern::InlineFlag { flag, template } => {
-                let prefix = format!("{flag}{}", sep_for(ctx.style));
-                if let Some(value) = token.strip_prefix(prefix.as_str()) {
-                    let mut next = state.clone();
-                    next.consumed_arg_or_sub = true;
-                    let cap_name = capture_name(template, &mut next.arg_counter);
-                    if let Err(reason) =
-                        validate_template_value(value, template, &ctx.config.contracts)
-                    {
-                        record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
-                        next.had_validation_error = true;
-                    }
-                    next.captures.insert(cap_name, value.to_string());
-                    if let Ok(done) = match_level(ctx, rule_idx, argv, pos + 1, next, failures) {
-                        return Some(done);
-                    }
-                }
-            }
-            ArgPattern::Template(template) => {
-                if !is_flag_like(token, ctx.style) {
-                    let mut next = state.clone();
-                    next.consumed_arg_or_sub = true;
-                    let cap_name = capture_name(template, &mut next.arg_counter);
-                    if let Err(reason) =
-                        validate_template_value(token, template, &ctx.config.contracts)
-                    {
-                        record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
-                        next.had_validation_error = true;
-                    }
-                    next.captures.insert(cap_name, token.clone());
-                    if let Ok(done) = match_level(ctx, rule_idx, argv, pos + 1, next, failures) {
-                        return Some(done);
-                    }
-                }
-            }
-            ArgPattern::TemplateContext {
-                prefix,
-                suffix,
-                template,
-            } => {
-                let works = prefix
-                    .as_ref()
-                    .is_none_or(|p| token.starts_with(p.as_str()))
-                    && suffix.as_ref().is_none_or(|s| token.ends_with(s.as_str()));
-                if works {
-                    let base_start = prefix.as_ref().map_or(0, String::len);
-                    let base_end = token.len() - suffix.as_ref().map_or(0, String::len);
-                    if base_start < base_end {
-                        let base = &token[base_start..base_end];
-                        let mut next = state.clone();
-                        next.consumed_arg_or_sub = true;
-                        let cap_name = capture_name(template, &mut next.arg_counter);
-                        if let Err(reason) =
-                            validate_template_value(base, template, &ctx.config.contracts)
-                        {
-                            record_failure(failures, rule_idx, &ctx.path, pos, token, &reason);
-                            next.had_validation_error = true;
-                        }
-                        next.captures.insert(cap_name, base.to_string());
-                        if let Ok(done) = match_level(ctx, rule_idx, argv, pos + 1, next, failures)
-                        {
-                            return Some(done);
-                        }
-                    }
-                }
-            }
+        if let Some(next) = try_pattern(
+            pattern, ctx, rule_idx, argv, pos, state, failures, true, false,
+        ) {
+            return Some(next);
         }
     }
 

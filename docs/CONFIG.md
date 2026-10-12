@@ -40,7 +40,7 @@ The config has these top-level sections:
 | Section | Purpose |
 | ------------------- | ------------------------------------------------------------------------------ |
 | `[global]` | Global settings: audit log, help text, limits, syslog tag. |
-| `[contracts]` | Named value constraints (`int_range`, `string_len`, `enum`) used in templates. |
+| `[contracts]` | Named value constraints used in templates. |
 | `[flag_groups]` | Named groups of flags reused across rules/subcommands. |
 | `[[rules]]` | Allowed command rules. |
 | `roots` | Default allowed filesystem roots (the `roots` root set). |
@@ -75,7 +75,7 @@ Each `[[rules]]` entry has:
 | `implicit_symlinks` | `true` | If true, allows the use of paths pointing to a symlink, otherwise will result in an error. |
 | `arg_style` | `gnu_long` | `gnu_long`, `posix_short`, or `dos`. |
 | `flag_groups` | `[]` | Named flag groups applied at this level. |
-| `flags` | `[]` | Allowed flags at this level. |
+| `flags` | `[]` | Allowed optional flags at this level. |
 | `args` | `[]` | Allowed arguments (literals, templates, inline flags). |
 | `pre_args` | `[]` | Static args injected before user argv. Placeholders `{name}` / `{name:-default}` are substituted from match captures. |
 | `subcommands` | `[]` | Nested subcommand rules. |
@@ -98,9 +98,8 @@ The Default is set to `5000ms`.
 
 ## Root sets
 
-File actions (`read_file`, `tail_file`, `stat_path`, `list_dir`) are sandboxed to
-a **root set**: a named list of absolute path prefixes. The action's `root_set`
-field selects which set applies.
+File actions are sandboxed to a named list of absolute path prefixes.
+The action's `root_set` field selects which set applies.
 
 - The default set is named `roots` and comes from the top-level `roots = [...]` array.
 - Additional named sets are defined under `[root_sets]`.
@@ -108,7 +107,7 @@ field selects which set applies.
   defining `[root_sets] roots = [...]` is rejected by `validate`.
 
 ```toml
-roots = ["/var/log/nginx"]                          # default "roots" set
+roots = ["/var/log/nginx"]                         # default "roots" set
 
 [root_sets]
 app = ["/srv/app/releases", "/srv/app/current"]    # named "app" set
@@ -144,7 +143,61 @@ max = 65535
 [contracts.unit]
 type = "enum"
 values = ["sshd", "nginx"]
+
+[contracts.log_path]
+type = "path"
+root_set = "roots"
 ```
+
+Contract types:
+
+- `int_range`: integer bounded by `min` / `max`
+- `string_len`: string length bounded by `min` / `max`
+- `enum`: exact match against listed `values`
+- `path`: path constrained to a configured root set
+
+### Path contracts
+
+A `path` contract validates a captured argument against one of the configured root sets during command matching.
+
+Example on a `run` rule:
+
+```toml
+roots = ["/var/log/"]
+
+[contracts.log_path]
+type = "path"
+root_set = "roots"
+
+[[rules]]
+command = "grep"
+flags = ["-n", "-i"]
+args = ["{pattern:string}", "{path:log_path}"]
+action = { type = "run", binary = "/usr/bin/grep", args = ["--color=never"], timeout = "10s" }
+```
+
+```toml
+roots = ["/var/log/nginx"]
+
+[root_sets]
+app = ["/srv/app/releases", "/srv/app/current"]
+
+[contracts.log_path]
+type = "path"
+root_set = "roots"
+
+[contracts.output_path]
+type = "path"
+root_set = "app"
+must_exist = false
+```
+
+Rules:
+
+- `root_set` selects the allowed root set, either the top-level `roots` or a named set under `[root_sets]`.
+- `must_exist` defaults to `true`.
+  - When `must_exist = true`, the path must already exist and will fail validation if it does not.
+  - When `must_exist = false`, the path may not exist yet, but it must still be within the allowed root set.
 
 ### Capture names
 
@@ -162,7 +215,7 @@ Use explicit named captures when a file action needs the value:
 [[rules]]
 action = { type = "read_file", path_capture = "path", root_set = "roots" }
 command = "cat"
-args = ["{path:string}"]
+args = ["{path:log_path}"]
 ```
 
 `path_capture` / `lines_capture` accept the name with or without braces,
@@ -183,6 +236,12 @@ action = { type = "run", binary = "/path/to/du", args = ["-d{depth:-1}"], timeou
 command = "du"
 args = ["{path}"]
 ```
+
+Flag pattern rules:
+
+- A `flags` entry like `--path={log_path}` matches both `--path=/var/log/nginx/access.log` and `--path /var/log/nginx/access.log`.
+- The same applies to short or DOS-style value flags, for example `-n={lines}` or `/level:{int}`.
+- Brace syntax in `flags` is parsed as a template pattern, not a literal brace sequence.
 
 Substitution rules:
 
@@ -221,6 +280,7 @@ Merge rules for profiles:
 - `rules`: appended after base rules.
 - `roots` / `units`: appended, unique, base-first order.
 - `root_sets`: same-name sets merge, paths appended unique, base-first order.
+- Profile-only root sets can be used by profile contracts and profile rules, but base rules/contracts must validate against the base config because they also apply when no profile matches.
 
 ---
 

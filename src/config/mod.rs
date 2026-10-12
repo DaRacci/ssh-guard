@@ -213,6 +213,7 @@ impl Config {
         let mut errors = Vec::new();
 
         validate_root_set_definitions(&self.root_sets, "base", &mut errors);
+        validate_contract_definitions(&self.contracts, &self.root_sets, "base", &mut errors);
         validate_rules(
             &self.flag_groups,
             &self.contracts,
@@ -232,6 +233,15 @@ impl Config {
             }
 
             let merged = self.merge_profile(profile);
+
+            if let Some(profile_contracts) = &profile.contracts {
+                validate_contract_definitions(
+                    profile_contracts,
+                    &merged.root_sets,
+                    &format!("profile '{pname}'"),
+                    &mut errors,
+                );
+            }
 
             if let Some(ref rules) = profile.rules {
                 validate_rules(
@@ -313,6 +323,24 @@ fn validate_root_set_definitions(root_sets: &RootSets, scope: &str, errors: &mut
     }
 }
 
+fn validate_contract_definitions(
+    contracts: &Contracts,
+    available_root_sets: &RootSets,
+    scope: &str,
+    errors: &mut Vec<String>,
+) {
+    for (name, contract) in contracts {
+        if let Contract::Path { root_set, .. } = contract
+            && root_set != DEFAULT_ROOT_SET
+            && !available_root_sets.contains_key(root_set)
+        {
+            errors.push(format!(
+                "{scope} contract '{name}': unknown root set '{root_set}'"
+            ));
+        }
+    }
+}
+
 fn collect_capture_keys(patterns: &[String], out: &mut Vec<String>) {
     use crate::engine::parse::parse_arg_pattern;
     use crate::engine::types::ArgPattern;
@@ -337,9 +365,20 @@ struct CapturePath {
     capture_keys: Vec<String>,
 }
 
-fn collect_rule_capture_paths(rule: &Rule) -> Vec<CapturePath> {
+fn expanded_flags(
+    available_flag_groups: &FlagGroups,
+    referenced_groups: &[String],
+    inline_flags: &[String],
+) -> Vec<String> {
+    crate::engine::flags::expand_flags(available_flag_groups, referenced_groups, inline_flags)
+}
+
+fn collect_rule_capture_paths(available_flag_groups: &FlagGroups, rule: &Rule) -> Vec<CapturePath> {
     let mut base_capture_keys = Vec::new();
-    collect_capture_keys(&rule.flags, &mut base_capture_keys);
+    collect_capture_keys(
+        &expanded_flags(available_flag_groups, &rule.flag_groups, &rule.flags),
+        &mut base_capture_keys,
+    );
     collect_capture_keys(&rule.args, &mut base_capture_keys);
 
     let mut paths = Vec::new();
@@ -352,6 +391,7 @@ fn collect_rule_capture_paths(rule: &Rule) -> Vec<CapturePath> {
 
     collect_subcommand_capture_paths(
         &rule.subcommands,
+        available_flag_groups,
         &Vec::new(),
         &base_capture_keys,
         &mut paths,
@@ -361,6 +401,7 @@ fn collect_rule_capture_paths(rule: &Rule) -> Vec<CapturePath> {
 
 fn collect_subcommand_capture_paths(
     subcommands: &[crate::config::subcommand::Subcommand],
+    available_flag_groups: &FlagGroups,
     current_path: &[String],
     current_capture_keys: &[String],
     out: &mut Vec<CapturePath>,
@@ -370,7 +411,14 @@ fn collect_subcommand_capture_paths(
         next_path.push(subcommand.name.clone());
 
         let mut next_capture_keys = current_capture_keys.to_vec();
-        collect_capture_keys(&subcommand.flags, &mut next_capture_keys);
+        collect_capture_keys(
+            &expanded_flags(
+                available_flag_groups,
+                &subcommand.flag_groups,
+                &subcommand.flags,
+            ),
+            &mut next_capture_keys,
+        );
         collect_capture_keys(&subcommand.args, &mut next_capture_keys);
 
         out.push(CapturePath {
@@ -380,6 +428,7 @@ fn collect_subcommand_capture_paths(
 
         collect_subcommand_capture_paths(
             &subcommand.subcommands,
+            available_flag_groups,
             &next_path,
             &next_capture_keys,
             out,
@@ -645,8 +694,13 @@ fn validate_subcommands(
             &sub_context,
             errors,
         );
-        validate_pattern_contracts(
+        let sub_flags = expanded_flags(
+            available_flag_groups,
+            &subcommand.flag_groups,
             &subcommand.flags,
+        );
+        validate_pattern_contracts(
+            &sub_flags,
             available_contracts,
             &format!("{sub_context} flags"),
             errors,
@@ -685,9 +739,10 @@ fn validate_rules(
     errors: &mut Vec<String>,
 ) {
     for (index, rule) in rules.iter().enumerate() {
-        let capture_paths = collect_rule_capture_paths(rule);
+        let capture_paths = collect_rule_capture_paths(available_flag_groups, rule);
         let context = format!("{scope} rule[{index}]");
         let all_capture_paths = capture_paths.iter().collect::<Vec<_>>();
+        let rule_flags = expanded_flags(available_flag_groups, &rule.flag_groups, &rule.flags);
 
         validate_action_captures(
             rule,
@@ -699,7 +754,7 @@ fn validate_rules(
         );
         validate_flag_group_refs(&rule.flag_groups, available_flag_groups, &context, errors);
         validate_pattern_contracts(
-            &rule.flags,
+            &rule_flags,
             available_contracts,
             &format!("{context} flags"),
             errors,
@@ -1413,6 +1468,45 @@ args = ["{path:string}"]
         let err = cfg.validate_semantics().unwrap_err().to_string();
         assert!(err.contains("action.args token '-d{depth}'"), "got: {err}");
         assert!(err.contains("missing capture 'depth'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_accepts_action_arg_capture_from_flag_group() {
+        let cfg: Config = toml::from_str(
+            r#"
+[flag_groups]
+paging = ["--lines={lines:int}"]
+
+[[rules]]
+command = "tail"
+action = { type = "run", binary = "/opt/test/bin/tail", args = ["{lines}"] }
+flag_groups = ["paging"]
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_unknown_contract_in_flag_group() {
+        let cfg: Config = toml::from_str(
+            r#"
+[flag_groups]
+captured = ["--path={missing_contract}"]
+
+[[rules]]
+command = "inspect"
+action = { type = "show_help" }
+flag_groups = ["captured"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(
+            err.contains("unknown contract 'missing_contract'"),
+            "got: {err}"
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 Read-only inspection for nginx and app logs:
 
 - `ls`, `stat`, `cat`, `tail` against bounded paths
+- `grep [-n] <pattern> <path>` as a `run` action with path-contract validation
 - `releases` listing scoped to a named `app` root set
 - `journalctl -u nginx [-n <lines>]`
 - profile-specific extra roots for deploy user
@@ -13,7 +14,8 @@ Read-only inspection for nginx and app logs:
 
 This one focuses on file actions and root-bounded access:
 
-- `read_file`, `tail_file`, `stat_path`, `list_dir`
+- `read_file`, `tail_file`, `stat_path`, `list_dir`, and one `run` action (`grep`)
+- path contracts that validate user path args against selected root sets before action dispatch
 - named path captures required by current validator
 - `lines_capture` for bounded tails
 - default `roots` set plus a named `app` root set via `[root_sets]`

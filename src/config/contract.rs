@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+#[coverage(off)]
+const fn default_must_exist() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Contract {
@@ -11,6 +16,14 @@ pub enum Contract {
 
     #[serde(rename = "enum")]
     Enum { values: Vec<String> },
+
+    #[serde(rename = "path")]
+    Path {
+        root_set: String,
+
+        #[serde(default = "default_must_exist")]
+        must_exist: bool,
+    },
 }
 
 #[cfg(test)]
@@ -36,6 +49,18 @@ mod tests {
     fn as_enum(contract: &Contract) -> Option<Vec<String>> {
         if let Contract::Enum { values } = contract {
             Some(values.clone())
+        } else {
+            None
+        }
+    }
+
+    fn as_path(contract: &Contract) -> Option<(String, bool)> {
+        if let Contract::Path {
+            root_set,
+            must_exist,
+        } = contract
+        {
+            Some((root_set.clone(), *must_exist))
         } else {
             None
         }
@@ -68,6 +93,25 @@ values = ["ssh", "nginx"]
 "#;
         let c: Contract = toml::from_str(toml_str).unwrap();
         assert_eq!(as_enum(&c), Some(vec!["ssh".into(), "nginx".into()]));
+    }
+
+    #[test]
+    fn test_deserialize_path_default_must_exist() {
+        let toml_str = r#"type = "path"
+root_set = "roots"
+"#;
+        let c: Contract = toml::from_str(toml_str).unwrap();
+        assert_eq!(as_path(&c), Some(("roots".into(), true)));
+    }
+
+    #[test]
+    fn test_deserialize_path_explicit_must_exist_false() {
+        let toml_str = r#"type = "path"
+root_set = "uploads"
+must_exist = false
+"#;
+        let c: Contract = toml::from_str(toml_str).unwrap();
+        assert_eq!(as_path(&c), Some(("uploads".into(), false)));
     }
 
     #[test]
@@ -173,5 +217,16 @@ min = 1
         let s = toml::to_string(&c).unwrap();
         let back: Contract = toml::from_str(&s).unwrap();
         assert_eq!(as_enum(&back), Some(vec!["a".into(), "b".into()]));
+    }
+
+    #[test]
+    fn test_round_trip_path() {
+        let c = Contract::Path {
+            root_set: "roots".into(),
+            must_exist: false,
+        };
+        let s = toml::to_string(&c).unwrap();
+        let back: Contract = toml::from_str(&s).unwrap();
+        assert_eq!(as_path(&back), Some(("roots".into(), false)));
     }
 }

@@ -12,23 +12,10 @@ use crate::config::duration::Duration;
 use crate::config::rule::Rule;
 use crate::config::subcommand::Subcommand;
 use crate::errors::GuardError;
+use crate::path_security::ensure_path_in_roots;
 
 fn resolve_within_roots(input_path: &Path, root_set: &[String]) -> Result<(), GuardError> {
-    let resolved = input_path.canonicalize().map_err(|_| {
-        GuardError::PathNotAllowed(format!("cannot resolve path '{}'", input_path.display()))
-    })?;
-
-    for root_str in root_set {
-        let root_path = Path::new(root_str);
-        if resolved.starts_with(root_path) {
-            return Ok(());
-        }
-    }
-
-    Err(GuardError::PathNotAllowed(format!(
-        "path '{}' not within any allowed root",
-        resolved.display()
-    )))
+    ensure_path_in_roots(input_path, root_set, true).map_err(GuardError::PathNotAllowed)
 }
 
 fn resolve_named_root_set<'a>(

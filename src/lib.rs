@@ -17,3 +17,4 @@ pub mod engine;
 pub mod errors;
 pub mod help;
 pub mod logging;
+mod path_security;

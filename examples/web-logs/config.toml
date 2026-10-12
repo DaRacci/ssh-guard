@@ -19,6 +19,7 @@ Read-only web/log diagnostics allowed:
   stat <path>
   cat <path>
   tail [-n <lines>] <path>
+  grep [-n] <pattern> <path>
   releases <path>
   journalctl -u nginx [-n <lines>]
 """
@@ -32,12 +33,20 @@ type = "int_range"
 min = 1
 max = 500
 
+[contracts.log_path]
+type = "path"
+root_set = "roots"
+
+[contracts.release_path]
+type = "path"
+root_set = "app"
+
 [[rules]]
 command = "ls"
 implicit_symlinks = true
 arg_style = "gnu_long"
 flags = ["-l", "-a", "-h", "-1", "--sort={string}"]
-args = ["{path:string}"]
+args = ["{path:log_path}"]
 
 [rules.action]
 type = "list_dir"
@@ -49,7 +58,7 @@ command = "stat"
 implicit_symlinks = true
 arg_style = "gnu_long"
 flags = ["-c={string}"]
-args = ["{path:string}"]
+args = ["{path:log_path}"]
 
 [rules.action]
 type = "stat_path"
@@ -60,7 +69,7 @@ root_set = "roots"
 command = "cat"
 implicit_symlinks = true
 arg_style = "gnu_long"
-args = ["{path:string}"]
+args = ["{path:log_path}"]
 
 [rules.action]
 type = "read_file"
@@ -72,7 +81,7 @@ command = "tail"
 implicit_symlinks = true
 arg_style = "gnu_long"
 flags = ["-n={lines}", "--lines={lines}"]
-args = ["{path:string}"]
+args = ["{path:log_path}"]
 
 [rules.action]
 type = "tail_file"
@@ -81,6 +90,21 @@ lines_capture = "lines"
 default_lines = 200
 root_set = "roots"
 
+# `grep` is a `run` action, but its path argument is still validated at match time
+# through the `log_path` contract before `/usr/bin/grep` is allowed to run.
+[[rules]]
+command = "grep"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-n", "-i", "-F"]
+args = ["{pattern:string}", "{path:log_path}"]
+
+[rules.action]
+type = "run"
+binary = "/usr/bin/grep"
+args = ["--color=never"]
+timeout = "10000ms"
+
 # `releases` is scoped to the `app` root set, which is separate from the default
 # `roots` set above. Only this set grants access to the release/current trees.
 [[rules]]
@@ -88,7 +112,7 @@ command = "releases"
 implicit_symlinks = true
 arg_style = "gnu_long"
 flags = ["-l", "-a", "-h", "-1", "--sort={string}"]
-args = ["{path:string}"]
+args = ["{path:release_path}"]
 
 [rules.action]
 type = "list_dir"
@@ -128,6 +152,7 @@ roots = ["/srv/app/releases", "/srv/app/current/config"]
 help_text = """
 Read-only web/log diagnostics for deploy user:
   ls|stat|cat|tail under nginx/app paths
+  grep [-n] <pattern> <path>
   releases <path>
   journalctl -u nginx [-n <lines>]
 """
