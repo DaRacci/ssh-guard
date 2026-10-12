@@ -86,6 +86,7 @@ fn config_with_rules(rule_count: usize) -> Config {
         flag_groups: HashMap::new(),
         rules,
         roots: vec![],
+        root_sets: HashMap::new(),
         units: vec![],
         profiles: HashMap::new(),
     }
@@ -121,6 +122,7 @@ fn enum_contract_config(enum_size: usize) -> (Config, Vec<String>) {
             vec!["{unit}".to_string()],
         )],
         roots: vec![],
+        root_sets: HashMap::new(),
         units: vec![],
         profiles: HashMap::new(),
     };
@@ -166,6 +168,7 @@ fn nested_config(depth: usize) -> (Config, Vec<String>) {
             flag_groups: HashMap::new(),
             rules: vec![rule],
             roots: vec![],
+            root_sets: HashMap::new(),
             units: vec![],
             profiles: HashMap::new(),
         },
@@ -255,6 +258,7 @@ fn resolve_profile_config(rule_count: usize) -> Config {
             "sshd.service".to_string(),
             "nginx.service".to_string(),
         ]),
+        root_sets: None,
     };
 
     let mut profiles = HashMap::new();
@@ -266,6 +270,7 @@ fn resolve_profile_config(rule_count: usize) -> Config {
         flag_groups: HashMap::new(),
         rules,
         roots: vec!["/srv/base".to_string(), "/srv/shared".to_string()],
+        root_sets: HashMap::new(),
         units: vec!["base.service".to_string()],
         profiles,
     }
@@ -303,6 +308,7 @@ mod matcher {
             flag_groups: HashMap::new(),
             rules: vec![complex_pattern_rule(pattern_count)],
             roots: vec![],
+            root_sets: HashMap::new(),
             units: vec![],
             profiles: HashMap::new(),
         };
@@ -336,6 +342,7 @@ mod matcher {
                 vec!["{string}".to_string()],
             )],
             roots: vec![],
+            root_sets: HashMap::new(),
             units: vec![],
             profiles: HashMap::new(),
         };

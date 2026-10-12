@@ -18,6 +18,9 @@ use crate::config::{
 pub type FlagGroups = HashMap<String, Vec<String>>;
 pub type Contracts = HashMap<String, Contract>;
 pub type Profiles = HashMap<String, Profile>;
+pub type RootSets = HashMap<String, Vec<String>>;
+
+pub(crate) const DEFAULT_ROOT_SET: &str = "roots";
 
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -33,9 +36,13 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 
-    /// Allowed filesystem roots (for path validations).
+    /// Allowed filesystem roots for default `roots` set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<String>,
+
+    /// Additional named filesystem root sets.
+    #[serde(default, skip_serializing_if = "RootSets::is_empty")]
+    pub root_sets: RootSets,
 
     /// Allowed systemd units.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -58,6 +65,15 @@ impl Config {
             crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
         })?;
         toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
+    }
+
+    #[must_use]
+    pub fn root_set_paths(&self, name: &str) -> Option<&[String]> {
+        if name == DEFAULT_ROOT_SET {
+            Some(self.roots.as_slice())
+        } else {
+            self.root_sets.get(name).map(Vec::as_slice)
+        }
     }
 
     /// SHA-256 hex digest of raw config file contents.
@@ -148,6 +164,7 @@ impl Config {
     /// - `flag_groups`: map merge, profile keys override same-name base keys.
     /// - `rules`: append profile rules after base rules.
     /// - `roots`: append unique values preserving base-first order.
+    /// - `root_sets`: same-name sets append unique values preserving base-first order.
     /// - `units`: append unique values preserving base-first order.
     /// - Unset profile sections leave base values intact.
     #[must_use]
@@ -175,19 +192,15 @@ impl Config {
         }
 
         if let Some(ref pr) = profile.roots {
-            for r in pr {
-                if !merged.roots.contains(r) {
-                    merged.roots.push(r.clone());
-                }
-            }
+            append_unique(&mut merged.roots, pr);
+        }
+
+        if let Some(ref profile_root_sets) = profile.root_sets {
+            merge_root_sets(&mut merged.root_sets, profile_root_sets);
         }
 
         if let Some(ref pu) = profile.units {
-            for u in pu {
-                if !merged.units.contains(u) {
-                    merged.units.push(u.clone());
-                }
-            }
+            append_unique(&mut merged.units, pu);
         }
 
         merged.profiles = Profiles::new();
@@ -199,33 +212,32 @@ impl Config {
     pub fn validation_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
+        validate_root_set_definitions(&self.root_sets, "base", &mut errors);
         validate_rules(
             &self.flag_groups,
             &self.contracts,
+            &self.root_sets,
             &self.rules,
             "base",
             &mut errors,
         );
 
         for (pname, profile) in &self.profiles {
-            let mut available_flag_groups = self.flag_groups.clone();
-            if let Some(profile_flag_groups) = &profile.flag_groups {
-                for (name, flags) in profile_flag_groups {
-                    available_flag_groups.insert(name.clone(), flags.clone());
-                }
+            if let Some(profile_root_sets) = &profile.root_sets {
+                validate_root_set_definitions(
+                    profile_root_sets,
+                    &format!("profile '{pname}'"),
+                    &mut errors,
+                );
             }
 
-            let mut available_contracts = self.contracts.clone();
-            if let Some(profile_contracts) = &profile.contracts {
-                for (name, contract) in profile_contracts {
-                    available_contracts.insert(name.clone(), contract.clone());
-                }
-            }
+            let merged = self.merge_profile(profile);
 
             if let Some(ref rules) = profile.rules {
                 validate_rules(
-                    &available_flag_groups,
-                    &available_contracts,
+                    &merged.flag_groups,
+                    &merged.contracts,
+                    &merged.root_sets,
                     rules,
                     &format!("profile '{pname}'"),
                     &mut errors,
@@ -276,6 +288,28 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+fn append_unique(target: &mut Vec<String>, values: &[String]) {
+    for value in values {
+        if !target.contains(value) {
+            target.push(value.clone());
+        }
+    }
+}
+
+fn merge_root_sets(target: &mut RootSets, incoming: &RootSets) {
+    for (name, paths) in incoming {
+        append_unique(target.entry(name.clone()).or_default(), paths);
+    }
+}
+
+fn validate_root_set_definitions(root_sets: &RootSets, scope: &str, errors: &mut Vec<String>) {
+    if root_sets.contains_key(DEFAULT_ROOT_SET) {
+        errors.push(format!(
+            "{scope}: reserved root set name '{DEFAULT_ROOT_SET}' must use the `roots` field"
+        ));
     }
 }
 
@@ -373,6 +407,7 @@ fn format_capture_path(path: &[String]) -> String {
 
 fn validate_action_captures(
     rule: &Rule,
+    available_root_sets: &RootSets,
     index: usize,
     scope: &str,
     capture_paths: &[CapturePath],
@@ -391,7 +426,7 @@ fn validate_action_captures(
             path_capture,
             root_set,
         } => {
-            validate_root_set(root_set, index, scope, errors);
+            validate_root_set(root_set, available_root_sets, index, scope, errors);
             vec![("path_capture", path_capture.as_str())]
         }
         Action::TailFile {
@@ -400,7 +435,7 @@ fn validate_action_captures(
             root_set,
             ..
         } => {
-            validate_root_set(root_set, index, scope, errors);
+            validate_root_set(root_set, available_root_sets, index, scope, errors);
             let mut refs = vec![("path_capture", path_capture.as_str())];
             if let Some(lines_capture) = lines_capture {
                 refs.push(("lines_capture", lines_capture.as_str()));
@@ -436,8 +471,14 @@ fn validate_action_captures(
     }
 }
 
-fn validate_root_set(root_set: &str, index: usize, scope: &str, errors: &mut Vec<String>) {
-    if root_set != "roots" {
+fn validate_root_set(
+    root_set: &str,
+    available_root_sets: &RootSets,
+    index: usize,
+    scope: &str,
+    errors: &mut Vec<String>,
+) {
+    if root_set != DEFAULT_ROOT_SET && !available_root_sets.contains_key(root_set) {
         errors.push(format!(
             "{scope} rule[{index}]: unknown root set '{root_set}'"
         ));
@@ -638,6 +679,7 @@ fn validate_subcommands(
 fn validate_rules(
     available_flag_groups: &FlagGroups,
     available_contracts: &Contracts,
+    available_root_sets: &RootSets,
     rules: &[Rule],
     scope: &str,
     errors: &mut Vec<String>,
@@ -647,7 +689,14 @@ fn validate_rules(
         let context = format!("{scope} rule[{index}]");
         let all_capture_paths = capture_paths.iter().collect::<Vec<_>>();
 
-        validate_action_captures(rule, index, scope, &capture_paths, errors);
+        validate_action_captures(
+            rule,
+            available_root_sets,
+            index,
+            scope,
+            &capture_paths,
+            errors,
+        );
         validate_flag_group_refs(&rule.flag_groups, available_flag_groups, &context, errors);
         validate_pattern_contracts(
             &rule.flags,
@@ -1115,6 +1164,38 @@ action = { type = "show_help" }
     }
 
     #[test]
+    fn test_parse_named_root_sets() {
+        let toml_str = r#"
+roots = ["/var/log"]
+
+[root_sets]
+data = ["/srv/data", "/srv/shared"]
+logs = ["/srv/log/app"]
+
+[[rules]]
+action = { type = "show_help" }
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        let value: toml::Value = toml::from_str(&cfg.to_toml_string().unwrap()).unwrap();
+
+        assert_eq!(
+            value["roots"].as_array().unwrap(),
+            &vec![toml::Value::String("/var/log".into())]
+        );
+        assert_eq!(
+            value["root_sets"]["data"].as_array().unwrap(),
+            &vec![
+                toml::Value::String("/srv/data".into()),
+                toml::Value::String("/srv/shared".into())
+            ]
+        );
+        assert_eq!(
+            value["root_sets"]["logs"].as_array().unwrap(),
+            &vec![toml::Value::String("/srv/log/app".into())]
+        );
+    }
+
+    #[test]
     fn test_from_file_nonexistent() {
         let path = "/tmp/__ssh_guard_test_nonexistent_should_not_exist.toml";
         let result = Config::from_file(path);
@@ -1411,10 +1492,9 @@ action = { type = "show_help" }
         );
     }
 
-    // Regression: `validate_root_set` must mirror the runtime check in
-    // `actions.rs`, which rejects any `root_set` other than "roots". A config
-    // using e.g. "data" previously passed `cli::validate` and only failed when
-    // the action actually ran.
+    // Regression: `validate_root_set` must mirror runtime root-set lookup in
+    // `actions.rs`. An undefined root set previously passed `cli::validate`
+    // and only failed when the action actually ran.
     #[test]
     fn test_validate_semantics_rejects_unknown_root_set() {
         let cfg: Config = toml::from_str(
@@ -1445,6 +1525,107 @@ args = ["{file:string}"]
         .unwrap();
         let result = cfg.validate_semantics();
         assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_semantics_accepts_named_root_set() {
+        let cfg: Config = toml::from_str(
+            r#"
+[root_sets]
+data = ["/srv/data"]
+
+[[rules]]
+command = "cat-data"
+action = { type = "read_file", path_capture = "{file}", root_set = "data" }
+args = ["{file:string}"]
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_reserved_root_set_name() {
+        let cfg: Config = toml::from_str(
+            r#"
+[root_sets]
+roots = ["/srv/data"]
+
+[[rules]]
+command = "help"
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("reserved root set name 'roots'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_accepts_profile_named_root_set() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "help"
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice"]
+
+[profiles.admin.root_sets]
+data = ["/srv/data"]
+
+[[profiles.admin.rules]]
+command = "cat-data"
+action = { type = "read_file", path_capture = "{file}", root_set = "data" }
+args = ["{file:string}"]
+"#,
+        )
+        .unwrap();
+        let result = cfg.validate_semantics();
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_profile_reserved_root_set_name() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "help"
+action = { type = "show_help" }
+
+[profiles.admin]
+users = ["alice"]
+
+[profiles.admin.root_sets]
+roots = ["/srv/data"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("reserved root set name 'roots'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_semantics_rejects_base_rule_using_profile_only_root_set() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[rules]]
+command = "cat-data"
+action = { type = "read_file", path_capture = "{file}", root_set = "data" }
+args = ["{file:string}"]
+
+[profiles.admin]
+users = ["alice"]
+
+[profiles.admin.root_sets]
+data = ["/srv/data"]
+"#,
+        )
+        .unwrap();
+        let err = cfg.validate_semantics().unwrap_err().to_string();
+        assert!(err.contains("unknown root set 'data'"), "got: {err}");
     }
 
     // A `Run` rule derives its command name from the binary filename, so no
@@ -1651,6 +1832,46 @@ roots = ["/common", "/profile"]
     }
 
     #[test]
+    fn test_merge_profile_named_root_sets_append_unique() {
+        let base: Config = toml::from_str(
+            r#"
+[root_sets]
+logs = ["/base/log", "/shared"]
+
+[[rules]]
+action = { type = "show_help" }
+"#,
+        )
+        .unwrap();
+
+        let profile: Profile = toml::from_str(
+            r#"
+users = ["bob"]
+
+[root_sets]
+logs = ["/shared", "/profile/log"]
+data = ["/srv/data"]
+"#,
+        )
+        .unwrap();
+
+        let merged = base.merge_profile(&profile);
+        let value: toml::Value = toml::from_str(&merged.to_toml_string().unwrap()).unwrap();
+        assert_eq!(
+            value["root_sets"]["logs"].as_array().unwrap(),
+            &vec![
+                toml::Value::String("/base/log".into()),
+                toml::Value::String("/shared".into()),
+                toml::Value::String("/profile/log".into())
+            ]
+        );
+        assert_eq!(
+            value["root_sets"]["data"].as_array().unwrap(),
+            &vec![toml::Value::String("/srv/data".into())]
+        );
+    }
+
+    #[test]
     fn test_merge_profile_units_append_unique() {
         let base: Config = toml::from_str(
             r#"
@@ -1731,6 +1952,7 @@ users = ["bob", "charlie"]
                         flag_groups: None,
                         rules: None,
                         roots: None,
+                        root_sets: None,
                         units: None,
                     },
                 );

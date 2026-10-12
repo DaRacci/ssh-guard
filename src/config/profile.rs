@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Contracts, FlagGroups, audit::AuditFormat, global::Global, rule::Rule};
+use crate::config::{
+    Contracts, FlagGroups, RootSets, audit::AuditFormat, global::Global, rule::Rule,
+};
 
 /// Field-wise overrides for `Global` settings within a profile.
 /// Each field is `Option` so only explicitly-set fields override the base.
@@ -84,9 +86,13 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<Rule>>,
 
-    /// Optional additional roots (appended unique, base-first order).
+    /// Optional additional roots for default `roots` set (appended unique, base-first order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots: Option<Vec<String>>,
+
+    /// Optional additional named root sets (same-name sets append unique, base-first order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_sets: Option<RootSets>,
 
     /// Optional additional units (appended unique, base-first order).
     #[serde(default, skip_serializing_if = "Option::is_none")]

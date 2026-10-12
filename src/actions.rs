@@ -31,6 +31,15 @@ fn resolve_within_roots(input_path: &Path, root_set: &[String]) -> Result<(), Gu
     )))
 }
 
+fn resolve_named_root_set<'a>(
+    config: &'a Config,
+    root_set: &str,
+) -> Result<&'a [String], GuardError> {
+    config
+        .root_set_paths(root_set)
+        .ok_or_else(|| GuardError::Action(format!("unknown root set '{root_set}'")))
+}
+
 fn resolve_binary(binary: &str, implicit_symlinks: bool) -> Result<String, GuardError> {
     let path = Path::new(binary);
     if !path.exists() {
@@ -248,9 +257,13 @@ fn action_run(
     }
 }
 
-fn action_read_file(path_str: &str, config: &Config) -> Result<(), GuardError> {
+fn action_read_file(
+    path_str: &str,
+    root_set: &[String],
+    config: &Config,
+) -> Result<(), GuardError> {
     let path = Path::new(path_str);
-    resolve_within_roots(path, &config.roots)?;
+    resolve_within_roots(path, root_set)?;
 
     let meta = metadata(path)?;
     if meta.len() > config.global.max_read_bytes as u64 {
@@ -304,16 +317,21 @@ fn read_tail_lines(path: &Path, lines: usize, max_lines: usize) -> Result<Vec<St
 fn action_tail_file(
     path_str: &str,
     lines: usize,
+    root_set: &[String],
     config: &Config,
 ) -> Result<Vec<String>, GuardError> {
     let path = Path::new(path_str);
-    resolve_within_roots(path, &config.roots)?;
+    resolve_within_roots(path, root_set)?;
     read_tail_lines(path, lines, config.global.max_tail_lines)
 }
 
-fn action_stat_path(path_str: &str, config: &Config) -> Result<(), GuardError> {
+fn action_stat_path(
+    path_str: &str,
+    root_set: &[String],
+    _config: &Config,
+) -> Result<(), GuardError> {
     let path = Path::new(path_str);
-    resolve_within_roots(path, &config.roots)?;
+    resolve_within_roots(path, root_set)?;
 
     let meta = symlink_metadata(path)?;
     let file_type = meta.file_type();
@@ -333,9 +351,13 @@ fn action_stat_path(path_str: &str, config: &Config) -> Result<(), GuardError> {
     Ok(())
 }
 
-fn action_list_dir(path_str: &str, config: &Config) -> Result<(), GuardError> {
+fn action_list_dir(
+    path_str: &str,
+    root_set: &[String],
+    _config: &Config,
+) -> Result<(), GuardError> {
     let path = Path::new(path_str);
-    resolve_within_roots(path, &config.roots)?;
+    resolve_within_roots(path, root_set)?;
 
     let mut entries: Vec<_> = read_dir(path)
         .map_err(|e| {
@@ -414,10 +436,8 @@ fn execute_read_file<S: ::std::hash::BuildHasher>(
                 "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
             ))
         })?;
-        if root_set != "roots" {
-            return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
-        }
-        action_read_file(path, config)?;
+        let selected_roots = resolve_named_root_set(config, root_set)?;
+        action_read_file(path, selected_roots, config)?;
         Ok(())
     } else {
         Err(GuardError::Action("expected ReadFile action".into()))
@@ -446,10 +466,8 @@ fn execute_tail_file<S: ::std::hash::BuildHasher>(
             .and_then(|lc| lookup_capture(captures, lc))
             .and_then(|l| l.parse::<usize>().ok())
             .unwrap_or(*default_lines);
-        if root_set != "roots" {
-            return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
-        }
-        for line in action_tail_file(path, lines, config)? {
+        let selected_roots = resolve_named_root_set(config, root_set)?;
+        for line in action_tail_file(path, lines, selected_roots, config)? {
             print!("{line}");
         }
         Ok(())
@@ -473,10 +491,8 @@ fn execute_stat_path<S: ::std::hash::BuildHasher>(
                 "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
             ))
         })?;
-        if root_set != "roots" {
-            return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
-        }
-        action_stat_path(path, config)?;
+        let selected_roots = resolve_named_root_set(config, root_set)?;
+        action_stat_path(path, selected_roots, config)?;
         Ok(())
     } else {
         Err(GuardError::Action("expected StatPath action".into()))
@@ -498,10 +514,8 @@ fn execute_list_dir<S: ::std::hash::BuildHasher>(
                 "missing capture '{path_capture}' (rule args must capture it, e.g. {{{path_capture}:string}} or a contract named '{path_capture}')"
             ))
         })?;
-        if root_set != "roots" {
-            return Err(GuardError::Action(format!("unknown root set '{root_set}'")));
-        }
-        action_list_dir(path, config)?;
+        let selected_roots = resolve_named_root_set(config, root_set)?;
+        action_list_dir(path, selected_roots, config)?;
         Ok(())
     } else {
         Err(GuardError::Action("expected ListDir action".into()))
@@ -1313,7 +1327,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        let result = action_read_file(file_path.to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
     }
 
@@ -1333,7 +1347,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        let result = action_read_file(file_path.to_str().unwrap(), &config.roots, &config);
         assert!(
             matches!(&result, Err(GuardError::Action(msg)) if msg.contains("exceeds limit")),
             "expected file too large error, got {result:?}"
@@ -1352,7 +1366,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_read_file(file_path.to_str().unwrap(), &config);
+        let result = action_read_file(file_path.to_str().unwrap(), &config.roots, &config);
         assert!(
             matches!(&result, Err(GuardError::PathNotAllowed(_))),
             "expected PathNotAllowed, got {result:?}"
@@ -1378,7 +1392,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_tail_file(file_path.to_str().unwrap(), 2, &config).unwrap();
+        let result =
+            action_tail_file(file_path.to_str().unwrap(), 2, &config.roots, &config).unwrap();
         assert_eq!(result, as_lines(&["line2\n", "line3\n"]));
     }
 
@@ -1399,7 +1414,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_tail_file(bad_path.to_str().unwrap(), 10, &config);
+        let result = action_tail_file(bad_path.to_str().unwrap(), 10, &config.roots, &config);
         assert!(
             matches!(&result, Err(GuardError::Action(msg)) if msg.contains("tail failed")),
             "expected tail failure, got {result:?}"
@@ -1421,7 +1436,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_tail_file(file_path.to_str().unwrap(), 100, &config).unwrap();
+        let result =
+            action_tail_file(file_path.to_str().unwrap(), 100, &config.roots, &config).unwrap();
         assert_eq!(
             result,
             as_lines(&["line15\n", "line16\n", "line17\n", "line18\n", "line19\n"])
@@ -1543,7 +1559,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_stat_path(file_path.to_str().unwrap(), &config);
+        let result = action_stat_path(file_path.to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
     }
 
@@ -1558,7 +1574,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_stat_path(&sub_dir.to_string_lossy(), &config);
+        let result = action_stat_path(&sub_dir.to_string_lossy(), &config.roots, &config);
         assert!(result.is_ok());
     }
 
@@ -1575,7 +1591,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_stat_path(link_path.to_str().unwrap(), &config);
+        let result = action_stat_path(link_path.to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
     }
 
@@ -1590,7 +1606,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_stat_path(fifo_path.to_str().unwrap(), &config);
+        let result = action_stat_path(fifo_path.to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
         // fifo cleaned up when TempDir drops
     }
@@ -1612,7 +1628,8 @@ mod tests {
             ..Default::default()
         };
 
-        let err = action_stat_path(link_path.to_str().unwrap(), &config).unwrap_err();
+        let err =
+            action_stat_path(link_path.to_str().unwrap(), &config.roots, &config).unwrap_err();
         assert!(
             matches!(err, GuardError::PathNotAllowed(_)),
             "expected PathNotAllowed, got {err:?}"
@@ -1637,7 +1654,7 @@ mod tests {
             ..Default::default()
         };
 
-        let err = action_stat_path(target.to_str().unwrap(), &config).unwrap_err();
+        let err = action_stat_path(target.to_str().unwrap(), &config.roots, &config).unwrap_err();
         assert!(
             matches!(err, GuardError::PathNotAllowed(_)),
             "expected PathNotAllowed, got {err:?}"
@@ -1660,7 +1677,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = action_list_dir(dir.path().to_str().unwrap(), &config);
+        let result = action_list_dir(dir.path().to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
     }
 
@@ -1737,6 +1754,41 @@ mod tests {
 
         let result = execute_read_file(&config, &action, &captures);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_read_file_named_root_set_success() {
+        let default_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+        let file_path = data_root.path().join("data.txt");
+        write(&file_path, "content").unwrap();
+
+        let config: Config = toml::from_str(&format!(
+            r#"
+roots = ["{}"]
+
+[root_sets]
+data = ["{}"]
+
+[[rules]]
+action = {{ type = "show_help" }}
+"#,
+            default_root.path().display(),
+            data_root.path().display()
+        ))
+        .unwrap();
+        let action = Action::ReadFile {
+            path_capture: "path".into(),
+            root_set: "data".into(),
+        };
+        let mut captures = HashMap::new();
+        captures.insert("path".into(), file_path.to_str().unwrap().to_string());
+
+        let result = execute_read_file(&config, &action, &captures);
+        assert!(
+            result.is_ok(),
+            "expected named root set to work, got {result:?}"
+        );
     }
 
     #[test]
