@@ -392,20 +392,23 @@ fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
     if let Some(v) = captures.get(reference) {
         return Some(v);
     }
+
     let trimmed = reference.trim();
-    let braced = trimmed.len() > 2
-        && trimmed.starts_with('{')
-        && trimmed.ends_with('}')
-        // A backslash before the opening brace escapes it: `\{x}` is literal.
-        && !trimmed.as_bytes()[..trimmed.len() - 1]
-            .iter()
-            .rev()
-            .any(|b| *b == b'\\')
-        && trimmed[1..trimmed.len() - 1].chars().all(|c| c != '{' && c != '}' && c != '\\');
-    if braced {
-        return captures.get(&trimmed[1..trimmed.len() - 1]);
+    let bytes = trimmed.as_bytes();
+
+    if !(trimmed.len() > 2
+        && bytes[0] == b'{'
+        && bytes[trimmed.len() - 1] == b'}'
+        && !crate::engine::parse::is_escaped(trimmed, trimmed.len() - 1))
+    {
+        return None;
     }
-    None
+
+    let inner = &trimmed[1..trimmed.len() - 1];
+    if inner.contains(['{', '}', '\\']) {
+        return None;
+    }
+    captures.get(inner)
 }
 
 fn execute_read_file<S: ::std::hash::BuildHasher>(
@@ -2469,6 +2472,16 @@ action = {{ type = "show_help" }}
         assert!(lookup_capture(&captures, r"\{path}").is_none());
         assert!(lookup_capture(&captures, "{path}").is_some());
         assert!(lookup_capture(&captures, "path").is_some());
+    }
+
+    #[test]
+    fn test_lookup_capture_rejects_escaped_or_embedded_backslash() {
+        let mut captures = HashMap::new();
+        captures.insert("path".to_string(), "/etc/hostname".to_string());
+        // Escaped closing brace, doubled backslash, and braces inside the name are all not braced references.
+        assert!(lookup_capture(&captures, r"{path\}").is_none());
+        assert!(lookup_capture(&captures, r"\\{path}").is_none());
+        assert!(lookup_capture(&captures, "{pa}th}").is_none());
     }
 
     #[test]

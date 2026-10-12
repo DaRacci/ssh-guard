@@ -241,7 +241,7 @@ Flag pattern rules:
 
 - A `flags` entry like `--path={log_path}` matches both `--path=/var/log/nginx/access.log` and `--path /var/log/nginx/access.log`.
 - The same applies to short or DOS-style value flags, for example `-n={lines}` or `/level:{int}`.
-- Brace syntax in `flags` is parsed as a template pattern, not a literal brace sequence.
+- Brace syntax in `flags` and `args` is parsed as a template pattern.
 
 Substitution rules:
 
@@ -250,6 +250,21 @@ Substitution rules:
 - Fail-closed: a placeholder with no capture and no default denies the command.
   A raw `{placeholder}` is never passed to the binary.
 - User-typed tokens pass through verbatim; only config-sourced strings are substituted.
+
+### Escaping braces
+
+Braces are special in `flags` / `args` patterns, `action.args` / `pre_args` placeholders, and `path_capture` / `lines_capture` references.
+Escape a brace to use it literally:
+
+- `\{` and `\}` emit a literal `{` and `}` that is never treated as a template.
+- `\\` emits a single literal `\`.
+- A backslash before any other character is kept verbatim.
+
+For example `flags = ['--format=\{\{.Names\}\}']` matches the literal token `--format={{.Names}}`,
+and `path_capture = '\{path}'` is not a reference to a capture named `path`.
+
+In a TOML basic (double-quoted) string, write `\\{` to get the config value `\{`;
+a TOML literal (single-quoted) string can hold `\{` directly.
 
 ---
 

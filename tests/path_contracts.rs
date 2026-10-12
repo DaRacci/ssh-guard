@@ -75,6 +75,35 @@ flags = ["--lines={lines}"]
 }
 
 #[test]
+fn test_escaped_braces_in_flags_match_literally() {
+    // TOML literal string: the config value seen by the parser is
+    // `--format=\{\{.Names\}\}` (docker-style Go template flag).
+    let cfg: Config = toml::from_str(
+        r#"
+[[rules]]
+command = "ps"
+action = { type = "show_help" }
+arg_style = "gnu_long"
+flags = ['--format=\{\{.Names\}\}']
+"#,
+    )
+    .unwrap();
+
+    // Escaped braces are literal, so no template/capture is created.
+    assert!(
+        cfg.validate_semantics().is_ok(),
+        "escaped braces should not be treated as a template: {:?}",
+        cfg.validate_semantics()
+    );
+
+    let result = match_command(&cfg, &argv(&[token("ps"), token("--format={{.Names}}")]));
+    assert!(
+        result.is_ok(),
+        "expected literal-brace flag to match: {result:?}"
+    );
+}
+
+#[test]
 fn test_path_contract_matches_existing_path_with_spaces_in_roots() {
     let root = tempfile::tempdir().unwrap();
     let file_path = root.path().join("hello world.txt");
