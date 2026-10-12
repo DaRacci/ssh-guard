@@ -19,6 +19,7 @@ impl RuleKind for ShowHelp {
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::collections::HashMap;
 

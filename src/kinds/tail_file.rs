@@ -100,6 +100,7 @@ impl RuleKind for TailFile<'_> {
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::collections::HashMap;
     use std::fmt::Write as _;

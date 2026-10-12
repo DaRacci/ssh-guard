@@ -62,6 +62,7 @@ impl RuleKind for ReadFile<'_> {
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::collections::HashMap;
     use std::fs::write;

@@ -65,6 +65,7 @@ impl RuleKind for StatPath<'_> {
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::collections::HashMap;
     use std::fs::{create_dir, write};

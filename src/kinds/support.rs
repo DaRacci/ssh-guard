@@ -54,6 +54,7 @@ pub(crate) fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::collections::HashMap;
     use std::fs::write;
