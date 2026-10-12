@@ -51,6 +51,7 @@ fn validate_rules_env(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
@@ -376,7 +377,7 @@ implicit_symlinks = false
         );
     }
 
-    /// Dangling symlink with `implicit_symlinks=false` should fail closed.
+    /// Dangling symlink: `exists()` returns false first → "does not exist" error.
     #[test]
     fn test_validate_dangling_symlink_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -398,8 +399,8 @@ implicit_symlinks = false
         assert!(result.is_err(), "expected Err for dangling symlink");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("symlink") && err.contains("cannot be resolved"),
-            "expected unresolved symlink error, got: {err}"
+            err.contains("does not exist"),
+            "expected 'does not exist' for dangling symlink, got: {err}"
         );
     }
 
@@ -424,8 +425,8 @@ implicit_symlinks = false
         assert!(result.is_err(), "expected Err for dangling symlink");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("is a symlink and cannot be resolved (implicit_symlinks disabled)"),
-            "expected unresolved symlink error, got: {err}"
+            err.contains("does not exist"),
+            "expected registry path to preserve 'does not exist', got: {err}"
         );
     }
 

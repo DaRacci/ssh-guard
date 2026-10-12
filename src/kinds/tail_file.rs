@@ -107,11 +107,11 @@ mod tests {
     use std::fs::{create_dir, write};
 
     use super::*;
+    use crate::config::Config;
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
     use crate::config::global::Global;
     use crate::config::rule::Rule;
-    use crate::config::Config;
     use crate::kinds::{ExecCtx, RuleKind};
 
     fn rule(action: Action) -> Rule {

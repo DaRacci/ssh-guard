@@ -24,11 +24,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::config::Config;
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
     use crate::config::global::Global;
     use crate::config::rule::Rule;
-    use crate::config::Config;
     use crate::kinds::{ExecCtx, RuleKind};
 
     fn rule() -> Rule {

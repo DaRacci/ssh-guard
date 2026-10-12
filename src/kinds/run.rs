@@ -28,44 +28,43 @@ impl RuleKind for Run<'_> {
             return;
         }
 
-        if !ctx.rule.implicit_symlinks {
-            match std::fs::symlink_metadata(self.binary) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    match path.canonicalize() {
-                        Ok(resolved) => {
-                            errors.push(format!(
-                                "{} rule[{}]: binary '{}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
-                                ctx.scope,
-                                ctx.index,
-                                self.binary,
-                                resolved.display()
-                            ));
-                        }
-                        Err(_) => {
-                            errors.push(format!(
-                                "{} rule[{}]: binary '{}' is a symlink and cannot be resolved (implicit_symlinks disabled)",
-                                ctx.scope, ctx.index, self.binary
-                            ));
-                        }
-                    }
-                    return;
-                }
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    errors.push(format!(
-                        "{} rule[{}]: cannot stat binary '{}': {}",
-                        ctx.scope, ctx.index, self.binary, error
-                    ));
-                    return;
-                }
-                _ => {}
-            }
-        }
-
         if !path.exists() {
             errors.push(format!(
                 "{} rule[{}]: binary '{}' does not exist",
                 ctx.scope, ctx.index, self.binary
             ));
+            return;
+        }
+
+        if !ctx.rule.implicit_symlinks {
+            return;
+        }
+
+        match std::fs::symlink_metadata(self.binary) {
+            Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
+                Ok(resolved) => {
+                    errors.push(format!(
+                            "{} rule[{}]: binary '{}' is a symlink -> '{}'. Set implicit_symlinks=true or use the real path.",
+                            ctx.scope,
+                            ctx.index,
+                            self.binary,
+                            resolved.display()
+                        ));
+                }
+                Err(_) => {
+                    errors.push(format!(
+                            "{} rule[{}]: binary '{}' is a symlink and cannot be resolved",
+                            ctx.scope, ctx.index, self.binary
+                        ));
+                }
+            },
+            Err(error) => {
+                errors.push(format!(
+                    "{} rule[{}]: cannot stat binary '{}': {}",
+                    ctx.scope, ctx.index, self.binary, error
+                ));
+            }
+            _ => {}
         }
     }
 
