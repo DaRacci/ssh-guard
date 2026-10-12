@@ -1,11 +1,8 @@
 use ssh_guard::config::{self, action::Action, arg::ArgStyle, duration::Duration, rule::Rule};
-use std::collections::{HashMap, hash_map::DefaultHasher};
-use std::hash::BuildHasherDefault;
-
-type TestBuildHasher = BuildHasherDefault<DefaultHasher>;
+use std::collections::HashMap;
 
 #[test]
-fn test_execute_argv_for_test_accepts_custom_hasher_captures() {
+fn test_execute_argv_for_test_accepts_standard_captures() {
     let rule = Rule {
         action: Action::Run {
             binary: "/opt/test/bin/du".into(),
@@ -22,7 +19,7 @@ fn test_execute_argv_for_test_accepts_custom_hasher_captures() {
         subcommands: vec![],
     };
     let user_argv = vec!["du".to_string(), "/var".to_string()];
-    let mut captures: HashMap<String, String, TestBuildHasher> = HashMap::default();
+    let mut captures = HashMap::new();
     captures.insert("depth".into(), "2".into());
 
     let built =
@@ -32,7 +29,7 @@ fn test_execute_argv_for_test_accepts_custom_hasher_captures() {
 }
 
 #[test]
-fn test_execute_accepts_custom_hasher_captures() {
+fn test_execute_accepts_standard_captures() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("data.txt");
     std::fs::write(&file_path, "content").unwrap();
@@ -55,7 +52,7 @@ fn test_execute_accepts_custom_hasher_captures() {
         pre_args: vec![],
         subcommands: vec![],
     };
-    let mut captures: HashMap<String, String, TestBuildHasher> = HashMap::default();
+    let mut captures = HashMap::new();
     captures.insert("path".into(), file_path.to_string_lossy().to_string());
 
     let result = ssh_guard::actions::execute(&config, &rule, &[], &captures, &[]);

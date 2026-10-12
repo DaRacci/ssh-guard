@@ -13,17 +13,14 @@ use crate::errors::GuardError;
 ///
 /// Returns an error when a `{name}` placeholder in the rule's config-sourced
 /// args has no matching capture and no `{name:-default}` fallback.
-pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
+#[allow(clippy::implicit_hasher)]
+pub fn execute_argv_for_test(
     rule: &Rule,
     subcommand_path: &[String],
-    captures: &HashMap<String, String, S>,
+    captures: &HashMap<String, String>,
     user_argv: &[String],
 ) -> Result<Vec<String>, GuardError> {
-    let captures: HashMap<String, String> = captures
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    crate::kinds::run::build_argv(rule, subcommand_path, user_argv, &captures)
+    crate::kinds::run::build_argv(rule, subcommand_path, user_argv, captures)
 }
 
 /// Execute matched rule action.
@@ -34,22 +31,19 @@ pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
 ///
 /// Returns `GuardError` when action execution fails, required captures are missing,
 /// or the rule contains an unsupported action payload.
-pub fn execute<S: ::std::hash::BuildHasher>(
+#[allow(clippy::implicit_hasher)]
+pub fn execute(
     config: &Config,
     rule: &Rule,
     subcommand_path: &[String],
-    captures: &HashMap<String, String, S>,
+    captures: &HashMap<String, String>,
     user_argv: &[String],
 ) -> Result<i32, GuardError> {
-    let captures: HashMap<String, String> = captures
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
     let ctx = crate::kinds::ExecCtx {
         config,
         rule,
         subcommand_path,
-        captures: &captures,
+        captures,
         user_argv,
     };
     crate::kinds::kind_for(&rule.action).execute(&ctx)

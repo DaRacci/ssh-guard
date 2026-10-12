@@ -27,8 +27,8 @@ pub(crate) fn resolve_named_root_set<'a>(
 /// both `"path"` and `"{path}"` resolve to the capture stored under key `path`.
 ///
 /// If the exact key is missing, the braced form is also tried so `{path}`-style references match contract-named captures.
-pub(crate) fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
-    captures: &'a HashMap<String, String, S>,
+pub(crate) fn lookup_capture<'a>(
+    captures: &'a HashMap<String, String>,
     reference: &str,
 ) -> Option<&'a String> {
     if let Some(v) = captures.get(reference) {
