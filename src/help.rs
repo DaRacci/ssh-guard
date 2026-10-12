@@ -3,7 +3,6 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::config::DEFAULT_ROOT_SET;
-use crate::config::action::Action;
 use crate::config::contract::Contract;
 use crate::config::rule::Rule;
 use crate::config::subcommand::Subcommand;
@@ -166,7 +165,7 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     lines.push(String::new());
 
     for rule in &config.rules {
-        if matches!(rule.action, Action::ShowHelp) {
+        if !crate::kinds::kind_for(&rule.action).visible_in_help() {
             continue;
         }
 
@@ -430,9 +429,10 @@ fn collect_value_details(config: &Config, opts: &HelpOptions) -> Vec<ValueDetail
     let mut details = Vec::new();
 
     for rule in &config.rules {
-        if matches!(rule.action, Action::ShowHelp) {
+        if !crate::kinds::kind_for(&rule.action).visible_in_help() {
             continue;
         }
+
         let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
         collect_details_for_tokens(&flags, true, &config.contracts, opts, &mut details);
         collect_details_for_tokens(&rule.args, false, &config.contracts, opts, &mut details);
