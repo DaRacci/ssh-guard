@@ -59,6 +59,9 @@ pub enum GuardError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("command denied: {0}")]
+    Denied(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -169,6 +172,12 @@ mod tests {
     fn guard_error_validation() {
         let e = GuardError::Validation("bad type".into());
         assert_eq!(e.to_string(), "validation error: bad type");
+    }
+
+    #[test]
+    fn guard_error_denied() {
+        let e = GuardError::Denied("rate limit exceeded".into());
+        assert_eq!(e.to_string(), "command denied: rate limit exceeded");
     }
 
     #[test]
