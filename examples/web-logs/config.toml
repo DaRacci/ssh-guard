@@ -4,6 +4,12 @@ roots = [
   "/etc/nginx",
 ]
 
+[root_sets]
+app = [
+  "/srv/app/releases",
+  "/srv/app/current",
+]
+
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
 audit_format = "json"
@@ -13,6 +19,7 @@ Read-only web/log diagnostics allowed:
   stat <path>
   cat <path>
   tail [-n <lines>] <path>
+  releases <path>
   journalctl -u nginx [-n <lines>]
 """
 log_tag = "ssh-guard"
@@ -74,6 +81,20 @@ lines_capture = "lines"
 default_lines = 200
 root_set = "roots"
 
+# `releases` is scoped to the `app` root set, which is separate from the default
+# `roots` set above. Only this set grants access to the release/current trees.
+[[rules]]
+command = "releases"
+implicit_symlinks = true
+arg_style = "gnu_long"
+flags = ["-l", "-a", "-h", "-1", "--sort={string}"]
+args = ["{path:string}"]
+
+[rules.action]
+type = "list_dir"
+path_capture = "path"
+root_set = "app"
+
 [[rules]]
 command = "journalctl"
 implicit_symlinks = true
@@ -107,5 +128,6 @@ roots = ["/srv/app/releases", "/srv/app/current/config"]
 help_text = """
 Read-only web/log diagnostics for deploy user:
   ls|stat|cat|tail under nginx/app paths
+  releases <path>
   journalctl -u nginx [-n <lines>]
 """

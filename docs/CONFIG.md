@@ -43,7 +43,8 @@ The config has these top-level sections:
 | `[contracts]` | Named value constraints (`int_range`, `string_len`, `enum`) used in templates. |
 | `[flag_groups]` | Named groups of flags reused across rules/subcommands. |
 | `[[rules]]` | Allowed command rules. |
-| `roots` | Allowed filesystem roots for file/path actions. |
+| `roots` | Default allowed filesystem roots (the `roots` root set). |
+| `[root_sets]` | Additional named filesystem root sets for file actions. |
 | `units` | Allowed systemd units (informational; used by templates). |
 | `[profiles.<name>]` | Per-user overrides that extend the base config. |
 
@@ -92,6 +93,40 @@ Each `[[rules]]` entry has:
 
 `timeout` accepts strings like `"5s"`, `"5000ms"`, `"2m"`, `"1.5h"`, or a bare integer in milliseconds.
 The Default is set to `5000ms`.
+
+---
+
+## Root sets
+
+File actions (`read_file`, `tail_file`, `stat_path`, `list_dir`) are sandboxed to
+a **root set**: a named list of absolute path prefixes. The action's `root_set`
+field selects which set applies.
+
+- The default set is named `roots` and comes from the top-level `roots = [...]` array.
+- Additional named sets are defined under `[root_sets]`.
+- `roots` is reserved: it always refers to the top-level `roots` field, so
+  defining `[root_sets] roots = [...]` is rejected by `validate`.
+
+```toml
+roots = ["/var/log/nginx"]                          # default "roots" set
+
+[root_sets]
+app = ["/srv/app/releases", "/srv/app/current"]    # named "app" set
+
+[[rules]]
+command = "releases"
+args = ["{path:string}"]
+action = { type = "list_dir", path_capture = "path", root_set = "app" }
+```
+
+`root_set` must name a set present in the config, or — for profile rules — in the
+merged base + profile config. `ssh-guard validate` rejects unknown names,
+including a base rule that references a set defined only inside a profile, since
+base rules also apply to users with no matching profile.
+
+A resolved path is canonicalized first (following symlinks), then checked against
+the selected set's prefixes, so symlinks and `..` traversal cannot escape the
+allowed roots.
 
 ---
 
@@ -185,6 +220,7 @@ Merge rules for profiles:
 - `contracts` / `flag_groups`: map merge; profile keys override same-name base keys.
 - `rules`: appended after base rules.
 - `roots` / `units`: appended, unique, base-first order.
+- `root_sets`: same-name sets merge, paths appended unique, base-first order.
 
 ---
 
