@@ -774,6 +774,7 @@ fn validate_rules(
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
