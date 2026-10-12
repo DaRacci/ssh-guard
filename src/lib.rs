@@ -16,5 +16,6 @@ pub mod config;
 pub mod engine;
 pub mod errors;
 pub mod help;
+mod kinds;
 pub mod logging;
 mod path_security;

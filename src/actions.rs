@@ -1,16 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::{File, metadata, read_dir, read_to_string, symlink_metadata};
 use std::io::BufRead;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Stdio;
-use std::time::Instant;
 
 use crate::config::Config;
 use crate::config::action::Action;
-use crate::config::duration::Duration;
 use crate::config::rule::Rule;
-use crate::config::subcommand::Subcommand;
 use crate::errors::GuardError;
 use crate::path_security::ensure_path_in_roots;
 
@@ -25,223 +20,6 @@ fn resolve_named_root_set<'a>(
     config
         .root_set_paths(root_set)
         .ok_or_else(|| GuardError::Action(format!("unknown root set '{root_set}'")))
-}
-
-fn resolve_binary(binary: &str, implicit_symlinks: bool) -> Result<String, GuardError> {
-    let path = Path::new(binary);
-    if !path.exists() {
-        return Err(GuardError::Action(format!(
-            "binary '{binary}' does not exist"
-        )));
-    }
-    if implicit_symlinks {
-        match path.canonicalize() {
-            Ok(resolved) => Ok(resolved.display().to_string()),
-            Err(e) => Err(GuardError::Action(format!(
-                "cannot resolve binary '{binary}': {e}"
-            ))),
-        }
-    } else {
-        let meta = symlink_metadata(binary)?;
-        if meta.file_type().is_symlink() {
-            return Err(GuardError::Action(format!(
-                "binary '{binary}' is a symlink and implicit_symlinks is disabled"
-            )));
-        }
-        Ok(binary.to_string())
-    }
-}
-
-fn find_sub_by_name<'a>(subs: &'a [Subcommand], name: &str) -> Option<&'a Subcommand> {
-    subs.iter().find(|s| s.name == name)
-}
-
-/// Substitute `{name}` and `{name:-default}` placeholders in a config-sourced
-/// argument with values from the match captures.
-///
-/// Fail-closed: a placeholder with no matching capture and no default is an error,
-/// never passed through to the binary as a literal token.
-/// `\{` and `\}` escape a literal brace; `\\` escapes a backslash.
-fn substitute_arg_template<S: ::std::hash::BuildHasher>(
-    arg: &str,
-    captures: &HashMap<String, String, S>,
-) -> Result<String, GuardError> {
-    let mut out = String::with_capacity(arg.len());
-    let mut chars = arg.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.peek() {
-                Some(&e @ ('{' | '}' | '\\')) => {
-                    out.push(e);
-                    chars.next();
-                }
-                _ => out.push(c),
-            }
-        } else if c == '{' {
-            let mut inner = String::new();
-            let mut closed = false;
-            for ic in chars.by_ref() {
-                if ic == '}' {
-                    closed = true;
-                    break;
-                }
-                inner.push(ic);
-            }
-            if !closed {
-                out.push('{');
-                out.push_str(&inner);
-                continue;
-            }
-            let (name, default) = match inner.split_once(":-") {
-                Some((n, d)) => (n, Some(d)),
-                None => (inner.as_str(), None),
-            };
-            if let Some(value) = captures.get(name) {
-                out.push_str(value);
-            } else if let Some(value) = default {
-                out.push_str(value);
-            } else {
-                return Err(GuardError::Action(format!(
-                    "missing capture '{name}' for template '{arg}'"
-                )));
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    Ok(out)
-}
-
-/// Build the final argv for a `Run` action.
-///
-/// Subcommand names are auto-injected from `sub.name`, followed by `pre_args`.
-/// `{name}` placeholders in `action.args` and all `pre_args` (rule-level and
-/// subcommand-level) are resolved from the match captures, with
-/// `{name:-default}` fallbacks.
-/// Only config-sourced strings and user-supplied flags/positionals appear in
-/// the final argv; user tokens are never template-substituted.
-fn build_command_argv<S: ::std::hash::BuildHasher>(
-    rule: &Rule,
-    subcommand_path: &[String],
-    user_argv: &[String],
-    captures: &HashMap<String, String, S>,
-) -> Result<Vec<String>, GuardError> {
-    let mut argv: Vec<String> = Vec::new();
-
-    if let Action::Run { args, .. } = &rule.action {
-        for arg in args {
-            argv.push(substitute_arg_template(arg, captures)?);
-        }
-    }
-
-    for arg in &rule.pre_args {
-        argv.push(substitute_arg_template(arg, captures)?);
-    }
-
-    // 2. Skip command routing token (first token that matched rule.command_name())
-    let cmd_name = rule.command_name();
-    let mut i: usize = 0;
-    if let Some(cmd) = cmd_name
-        && i < user_argv.len()
-        && user_argv[i] == cmd
-    {
-        i += 1;
-    }
-
-    // 3. Walk user_argv token-by-token; inject pre_args when token matches
-    //    next expected subcommand name.
-    let mut sub_level: usize = 0;
-    let mut subs: &[Subcommand] = &rule.subcommands;
-
-    while i < user_argv.len() && sub_level < subcommand_path.len() {
-        let token = &user_argv[i];
-        i += 1;
-
-        if token == &subcommand_path[sub_level] {
-            // Routing token - auto-inject sub.name + pre_args
-            if let Some(sub) = find_sub_by_name(subs, &subcommand_path[sub_level]) {
-                argv.push(sub.name.clone());
-                for arg in &sub.pre_args {
-                    argv.push(substitute_arg_template(arg, captures)?);
-                }
-                subs = &sub.subcommands;
-            }
-            sub_level += 1;
-        } else {
-            argv.push(token.clone());
-        }
-    }
-
-    if i < user_argv.len() {
-        argv.extend_from_slice(&user_argv[i..]);
-    }
-
-    Ok(argv)
-}
-
-fn action_run(
-    binary: &str,
-    argv: &[String],
-    implicit_symlinks: bool,
-    timeout: &Duration,
-) -> Result<i32, GuardError> {
-    let resolved = resolve_binary(binary, implicit_symlinks)?;
-
-    // Preserve the original binary name as argv[0] so multi-call binaries
-    // (coreutils, busybox, etc.) dispatch to the correct subcommand.
-    let binary_name = Path::new(binary)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("ssh-guard-cmd")
-        .to_string();
-
-    let mut cmd = std::process::Command::new(&resolved);
-    cmd.arg0(binary_name);
-    cmd.args(argv);
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::inherit());
-    // Put child in its own process group so we can kill the entire
-    // group (including grandchildren) on timeout instead of leaving orphans.
-    cmd.process_group(0);
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| GuardError::Action(format!("cannot spawn '{resolved}': {e}")))?;
-
-    let start = Instant::now();
-    let timeout_dur = std::time::Duration::from_millis(timeout.millis);
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status.code().unwrap_or(1)),
-            Ok(None) => {
-                if start.elapsed() > timeout_dur {
-                    // Kill entire process group (children, grandchildren, etc.)
-                    // Negative PID targets the process group in kill(2).
-                    let Ok(child_pid) = i32::try_from(child.id()) else {
-                        let _ = child.wait();
-                        return Err(GuardError::Action(format!(
-                            "child pid '{}' exceeds supported range",
-                            child.id()
-                        )));
-                    };
-                    let pid = nix::unistd::Pid::from_raw(-child_pid);
-                    let _ = nix::sys::signal::kill(pid, nix::sys::signal::SIGKILL);
-                    let _ = child.wait();
-                    return Err(GuardError::Action(format!(
-                        "command '{binary}' timed out after {}ms",
-                        timeout.millis
-                    )));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(e) => {
-                return Err(GuardError::Action(format!(
-                    "error waiting for '{binary}': {e}"
-                )));
-            }
-        }
-    }
 }
 
 fn action_read_file(
@@ -361,24 +139,6 @@ fn action_list_dir(
     Ok(())
 }
 
-fn execute_run<S: ::std::hash::BuildHasher>(
-    _config: &Config,
-    rule: &Rule,
-    subcommand_path: &[String],
-    captures: &HashMap<String, String, S>,
-    user_argv: &[String],
-) -> Result<i32, GuardError> {
-    if let Action::Run {
-        binary, timeout, ..
-    } = &rule.action
-    {
-        let argv = build_command_argv(rule, subcommand_path, user_argv, captures)?;
-        action_run(binary, &argv, rule.implicit_symlinks, timeout)
-    } else {
-        Err(GuardError::Action("expected Run action".into()))
-    }
-}
-
 /// Resolve a capture reference from the match captures.
 ///
 /// File-action fields may be written with or without template braces: both
@@ -411,7 +171,7 @@ fn lookup_capture<'a, S: ::std::hash::BuildHasher>(
     captures.get(inner)
 }
 
-fn execute_read_file<S: ::std::hash::BuildHasher>(
+pub(crate) fn execute_read_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
@@ -434,7 +194,7 @@ fn execute_read_file<S: ::std::hash::BuildHasher>(
     }
 }
 
-fn execute_tail_file<S: ::std::hash::BuildHasher>(
+pub(crate) fn execute_tail_file<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
@@ -466,7 +226,7 @@ fn execute_tail_file<S: ::std::hash::BuildHasher>(
     }
 }
 
-fn execute_stat_path<S: ::std::hash::BuildHasher>(
+pub(crate) fn execute_stat_path<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
@@ -489,7 +249,7 @@ fn execute_stat_path<S: ::std::hash::BuildHasher>(
     }
 }
 
-fn execute_list_dir<S: ::std::hash::BuildHasher>(
+pub(crate) fn execute_list_dir<S: ::std::hash::BuildHasher>(
     config: &Config,
     action: &Action,
     captures: &HashMap<String, String, S>,
@@ -512,26 +272,27 @@ fn execute_list_dir<S: ::std::hash::BuildHasher>(
     }
 }
 
-fn execute_show_help(config: &Config) {
+pub(crate) fn execute_show_help(config: &Config) {
     print!("{}", config.global.help_text);
 }
 
 /// Build the executable argv for a rule without running the binary.
 ///
-/// Test and audit seam over `build_command_argv`: same template substitution
+/// Test and audit seam over `kinds::run::build_argv`: same template substitution
 /// and fail-closed behavior, no side effects.
 ///
 /// # Errors
 ///
 /// Returns an error when a `{name}` placeholder in the rule's config-sourced
 /// args has no matching capture and no `{name:-default}` fallback.
-pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
+#[allow(clippy::implicit_hasher)]
+pub fn execute_argv_for_test(
     rule: &Rule,
     subcommand_path: &[String],
-    captures: &HashMap<String, String, S>,
+    captures: &HashMap<String, String>,
     user_argv: &[String],
 ) -> Result<Vec<String>, GuardError> {
-    build_command_argv(rule, subcommand_path, user_argv, captures)
+    crate::kinds::run::build_argv(rule, subcommand_path, user_argv, captures)
 }
 
 /// Execute matched rule action.
@@ -542,39 +303,28 @@ pub fn execute_argv_for_test<S: ::std::hash::BuildHasher>(
 ///
 /// Returns `GuardError` when action execution fails, required captures are missing,
 /// or the rule contains an unsupported action payload.
-pub fn execute<S: ::std::hash::BuildHasher>(
+#[allow(clippy::implicit_hasher)]
+pub fn execute(
     config: &Config,
     rule: &Rule,
     subcommand_path: &[String],
-    captures: &HashMap<String, String, S>,
+    captures: &HashMap<String, String>,
     user_argv: &[String],
 ) -> Result<i32, GuardError> {
-    let action_tag = match &rule.action {
-        Action::Run { .. } => 0u8,
-        Action::ReadFile { .. } => 1,
-        Action::TailFile { .. } => 2,
-        Action::StatPath { .. } => 3,
-        Action::ListDir { .. } => 4,
-        Action::ShowHelp => 5,
+    let ctx = crate::kinds::ExecCtx {
+        config,
+        rule,
+        subcommand_path,
+        captures,
+        user_argv,
     };
-
-    match action_tag {
-        0 => execute_run(config, rule, subcommand_path, captures, user_argv),
-        1 => execute_read_file(config, &rule.action, captures).map(|()| 0),
-        2 => execute_tail_file(config, &rule.action, captures).map(|()| 0),
-        3 => execute_stat_path(config, &rule.action, captures).map(|()| 0),
-        4 => execute_list_dir(config, &rule.action, captures).map(|()| 0),
-        5 => {
-            execute_show_help(config);
-            Ok(0)
-        }
-        _ => Err(GuardError::Action("unknown action type".into())),
-    }
+    crate::kinds::kind_for(&rule.action).execute(&ctx)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::config::arg::ArgStyle;
+    use crate::config::duration::Duration;
     use crate::config::global::Global;
     use nix::sys::stat::Mode;
     use std::collections::HashMap;
@@ -584,33 +334,12 @@ mod tests {
 
     use super::*;
 
-    // =====================================================================
-    // Self-exec subprocess fixtures
-    // =====================================================================
-    // The `action_run` tests need a child process that exits 0, and outlives a 1ms timeout.
-    // Doing this without depending on host tools and without writing + exec'ing a throwaway temp.
-    //
-    // So we execute the test harness binary itself and pass `--exact <test path>` so the child runs exactly one of the `subprocess_helper_*` tests below, then exits:
-    //   - `subprocess_helper_success` -> exits 0 immediately
-    //   - `subprocess_helper_sleep`   -> sleeps 100ms
-
-    /// Path to the compiled test-harness binary.
     fn test_binary_path() -> PathBuf {
         std::env::current_exe().unwrap()
     }
 
     fn test_binary_args(test_name: &str) -> Vec<String> {
         vec!["--exact".into(), test_name.into()]
-    }
-
-    /// Re-exec target that exits 0 immediately.
-    #[test]
-    fn subprocess_helper_success() {}
-
-    /// Re-exec target that stays alive long enough for a 1ms timeout to fire.
-    #[test]
-    fn subprocess_helper_sleep() {
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     /// File content with `count` numbered lines, each newline-terminated.
@@ -624,496 +353,6 @@ mod tests {
 
     fn as_lines(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| (*v).to_string()).collect()
-    }
-
-    fn make_systemctl_rule() -> Rule {
-        Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/systemctl".into(),
-                args: vec!["--no-pager".into()],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("systemctl".into()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![
-                Subcommand {
-                    name: "status".into(),
-                    arg_style: None,
-                    flag_groups: vec![],
-                    flags: vec![],
-                    args: vec![],
-                    pre_args: vec!["--no-pager".into(), "--full".into()],
-                    subcommands: vec![],
-                },
-                Subcommand {
-                    name: "show".into(),
-                    arg_style: None,
-                    flag_groups: vec![],
-                    flags: vec![],
-                    args: vec![],
-                    pre_args: vec!["--property=Id,Type,ActiveState".into()],
-                    subcommands: vec![],
-                },
-            ],
-        }
-    }
-
-    fn make_simple_rule() -> Rule {
-        Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/journalctl".into(),
-                args: vec!["--no-pager".into()],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("journalctl".into()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![],
-        }
-    }
-
-    #[test]
-    fn test_build_command_systemctl_status() {
-        let rule = make_systemctl_rule();
-        // User types: systemctl status angrr
-        let user_argv = vec![
-            "systemctl".to_string(),
-            "status".to_string(),
-            "angrr".to_string(),
-        ];
-        let subcommand_path = vec!["status".to_string()];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        // Should produce: systemctl --no-pager status --no-pager --full angrr
-        assert_eq!(
-            result,
-            vec![
-                "--no-pager".to_string(),
-                "status".to_string(),
-                "--no-pager".to_string(),
-                "--full".to_string(),
-                "angrr".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_systemctl_show() {
-        let rule = make_systemctl_rule();
-        let user_argv = vec![
-            "systemctl".to_string(),
-            "show".to_string(),
-            "sshd".to_string(),
-        ];
-        let subcommand_path = vec!["show".to_string()];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        assert_eq!(
-            result,
-            vec![
-                "--no-pager".to_string(),
-                "show".to_string(),
-                "--property=Id,Type,ActiveState".to_string(),
-                "sshd".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_no_subcommand() {
-        let rule = make_simple_rule();
-        // User types: journalctl -u sshd -n 10
-        let user_argv = vec![
-            "journalctl".to_string(),
-            "-u".to_string(),
-            "sshd".to_string(),
-            "-n".to_string(),
-            "10".to_string(),
-        ];
-        let subcommand_path: Vec<String> = vec![];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        // Command token skipped, everything else passed through
-        assert_eq!(
-            result,
-            vec![
-                "--no-pager".to_string(),
-                "-u".to_string(),
-                "sshd".to_string(),
-                "-n".to_string(),
-                "10".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_no_args() {
-        let rule = make_simple_rule();
-        let user_argv = vec!["journalctl".to_string()];
-        let subcommand_path: Vec<String> = vec![];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        assert_eq!(result, vec!["--no-pager".to_string()]);
-    }
-
-    #[test]
-    fn test_build_command_nested_subcommands() {
-        let rule = Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/git".into(),
-                args: vec![],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("git".into()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![Subcommand {
-                name: "remote".into(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec![],
-                subcommands: vec![Subcommand {
-                    name: "add".into(),
-                    arg_style: None,
-                    flag_groups: vec![],
-                    flags: vec![],
-                    args: vec![],
-                    pre_args: vec!["--verbose".into()],
-                    subcommands: vec![],
-                }],
-            }],
-        };
-
-        // User types: git remote add origin
-        let user_argv = vec![
-            "git".to_string(),
-            "remote".to_string(),
-            "add".to_string(),
-            "origin".to_string(),
-        ];
-        let subcommand_path = vec!["remote".to_string(), "add".to_string()];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        assert_eq!(
-            result,
-            vec![
-                "remote".to_string(),
-                "add".to_string(),
-                "--verbose".to_string(),
-                "origin".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_command_not_first() {
-        // Edge case: command token not at position 0 (shouldn't happen in practice)
-        let rule = make_systemctl_rule();
-        let user_argv = vec![
-            "other".to_string(),
-            "systemctl".to_string(),
-            "status".to_string(),
-            "angrr".to_string(),
-        ];
-        let subcommand_path = vec!["status".to_string()];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        // Command token not skipped (argv[0] != "systemctl"), passes through as regular token
-        // "status" matches routing → inject "status" + pre_args
-        assert_eq!(
-            result,
-            vec![
-                "--no-pager".to_string(),
-                "other".to_string(),
-                "systemctl".to_string(),
-                "status".to_string(),
-                "--no-pager".to_string(),
-                "--full".to_string(),
-                "angrr".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_only_command_no_subcommand() {
-        let rule = make_simple_rule();
-        let user_argv = vec!["journalctl".to_string()];
-        let subcommand_path: Vec<String> = vec![];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        assert_eq!(result, vec!["--no-pager".to_string()]);
-    }
-
-    #[test]
-    fn test_build_command_action_args_before_subcommand() {
-        // Action-level args are prepended before subcommand name + pre_args
-        let rule = Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/cmd".to_string(),
-                args: vec!["--binary-flag".to_string()],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("cmd".to_string()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![Subcommand {
-                name: "sub".to_string(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec!["--sub-flag".to_string()],
-                subcommands: vec![],
-            }],
-        };
-        let user_argv = vec!["cmd".to_string(), "sub".to_string(), "arg1".to_string()];
-        let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
-        assert_eq!(
-            result,
-            vec![
-                "--binary-flag".to_string(),
-                "sub".to_string(),
-                "--sub-flag".to_string(),
-                "arg1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_deeply_nested_three_levels() {
-        // All subcommand pre_args collected across nesting levels
-        let rule = Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/git".to_string(),
-                args: vec![],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("git".to_string()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![Subcommand {
-                name: "remote".to_string(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec!["--l1".to_string()],
-                subcommands: vec![Subcommand {
-                    name: "add".to_string(),
-                    arg_style: None,
-                    flag_groups: vec![],
-                    flags: vec![],
-                    args: vec![],
-                    pre_args: vec!["--l2".to_string()],
-                    subcommands: vec![Subcommand {
-                        name: "verbose".to_string(),
-                        arg_style: None,
-                        flag_groups: vec![],
-                        flags: vec![],
-                        args: vec![],
-                        pre_args: vec!["--l3".to_string()],
-                        subcommands: vec![],
-                    }],
-                }],
-            }],
-        };
-        let user_argv = vec![
-            "git".to_string(),
-            "remote".to_string(),
-            "add".to_string(),
-            "verbose".to_string(),
-            "origin".to_string(),
-        ];
-        let sub_path = vec![
-            "remote".to_string(),
-            "add".to_string(),
-            "verbose".to_string(),
-        ];
-        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
-        assert_eq!(
-            result,
-            vec![
-                "remote".to_string(),
-                "--l1".to_string(),
-                "add".to_string(),
-                "--l2".to_string(),
-                "verbose".to_string(),
-                "--l3".to_string(),
-                "origin".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_user_tokens_passthrough() {
-        // Non-command, non-subcommand tokens pass through verbatim
-        let rule = Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/cmd".to_string(),
-                args: vec![],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("cmd".to_string()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![Subcommand {
-                name: "sub".to_string(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec!["--sub-flag".to_string()],
-                subcommands: vec![],
-            }],
-        };
-        let user_argv = vec![
-            "cmd".to_string(),
-            "--flag".to_string(),
-            "value".to_string(),
-            "sub".to_string(),
-            "extra".to_string(),
-        ];
-        let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
-        assert_eq!(
-            result,
-            vec![
-                "--flag".to_string(),
-                "value".to_string(),
-                "sub".to_string(),
-                "--sub-flag".to_string(),
-                "extra".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_multiple_tokens_before_subcommand() {
-        // User flags/positionals before subcommand match pass through
-        let rule = make_systemctl_rule();
-        let user_argv = vec![
-            "systemctl".into(),
-            "-H".into(),
-            "host.example.com".into(),
-            "status".into(),
-            "sshd".into(),
-        ];
-        let sub_path = vec!["status".into()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
-        assert_eq!(
-            result,
-            vec![
-                "--no-pager".to_string(),
-                "-H".to_string(),
-                "host.example.com".to_string(),
-                "status".to_string(),
-                "--no-pager".to_string(),
-                "--full".to_string(),
-                "sshd".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_no_command_name() {
-        // ReadFile action with no explicit command name -> command_name() returns None
-        let rule = Rule {
-            action: Action::ReadFile {
-                path_capture: "path".into(),
-                root_set: "root".into(),
-            },
-            command: None,
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![],
-        };
-        let user_argv = vec!["somecmd".to_string()];
-        let subcommand_path: Vec<String> = vec![];
-
-        let result =
-            build_command_argv(&rule, &subcommand_path, &user_argv, &HashMap::new()).unwrap();
-
-        // No action args (ReadFile has none), no cmd_name to skip,
-        // no subcommands -> user_argv passes through verbatim
-        assert_eq!(result, vec!["somecmd".to_string()]);
-    }
-
-    #[test]
-    fn test_build_command_no_action_args_with_subcommand() {
-        // Empty action args, only subcommand name + pre_args injected
-        let rule = Rule {
-            action: Action::Run {
-                binary: "/opt/test/bin/cmd".to_string(),
-                args: vec![],
-                timeout: Duration { millis: 5000 },
-            },
-            command: Some("cmd".to_string()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![Subcommand {
-                name: "sub".to_string(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec!["--internal".to_string()],
-                subcommands: vec![],
-            }],
-        };
-        let user_argv = vec!["cmd".to_string(), "sub".to_string()];
-        let sub_path = vec!["sub".to_string()];
-        let result = build_command_argv(&rule, &sub_path, &user_argv, &HashMap::new()).unwrap();
-        assert_eq!(result, vec!["sub".to_string(), "--internal".to_string()]);
     }
 
     // -----------------------------------------------------------------------
@@ -1154,151 +393,6 @@ mod tests {
         assert!(
             matches!(err, GuardError::PathNotAllowed(_)),
             "expected PathNotAllowed, got {err:?}"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Tests for resolve_binary
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_resolve_binary_implicit_symlinks_true() {
-        // Use a temp file (not a symlink) with implicit_symlinks=true
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("mybinary");
-        write(&bin_path, "").unwrap();
-        let result = resolve_binary(bin_path.to_str().unwrap(), true).unwrap();
-        // canonicalize resolves, so result should be an absolute path
-        assert!(result.contains("mybinary"));
-    }
-
-    #[test]
-    fn test_resolve_binary_implicit_symlinks_false_not_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_path = dir.path().join("mybinary");
-        write(&bin_path, "").unwrap();
-        let result = resolve_binary(bin_path.to_str().unwrap(), false).unwrap();
-        assert_eq!(result, bin_path.to_str().unwrap());
-    }
-
-    #[test]
-    fn test_resolve_binary_implicit_symlinks_false_is_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let real_file = dir.path().join("real");
-        write(&real_file, "content").unwrap();
-        let symlink_path = dir.path().join("link");
-        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
-
-        let err = resolve_binary(symlink_path.to_str().unwrap(), false).unwrap_err();
-        assert!(
-            matches!(&err, GuardError::Action(msg) if msg.contains("symlink")),
-            "expected symlink error, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_binary_not_exists() {
-        let err = resolve_binary("/nonexistent/binary/12345", true).unwrap_err();
-        assert!(
-            matches!(&err, GuardError::Action(msg) if msg.contains("does not exist")),
-            "expected 'does not exist' error, got {err:?}"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Tests for find_sub_by_name
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_find_sub_by_name_found() {
-        let subs = vec![
-            Subcommand {
-                name: "status".into(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec![],
-                subcommands: vec![],
-            },
-            Subcommand {
-                name: "show".into(),
-                arg_style: None,
-                flag_groups: vec![],
-                flags: vec![],
-                args: vec![],
-                pre_args: vec![],
-                subcommands: vec![],
-            },
-        ];
-        assert!(find_sub_by_name(&subs, "status").is_some());
-        assert!(find_sub_by_name(&subs, "show").is_some());
-    }
-
-    #[test]
-    fn test_find_sub_by_name_not_found() {
-        let subs = vec![Subcommand {
-            name: "status".into(),
-            arg_style: None,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![],
-        }];
-        assert!(find_sub_by_name(&subs, "nonexistent").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // Tests for action_run
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_action_run_success() {
-        // Child = this test binary re-exec'd to run `subprocess_helper_success`.
-        let bin_path = test_binary_path();
-        let argv = test_binary_args("actions::tests::subprocess_helper_success");
-        let result = action_run(
-            bin_path.to_str().unwrap(),
-            &argv,
-            true,
-            &Duration { millis: 5000 },
-        );
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[test]
-    fn test_action_run_timeout() {
-        // Child = this test binary re-exec'd to run `subprocess_helper_sleep`,
-        // which stays alive past the 1ms timeout below.
-        let bin_path = test_binary_path();
-        let argv = test_binary_args("actions::tests::subprocess_helper_sleep");
-        let result = action_run(
-            bin_path.to_str().unwrap(),
-            &argv,
-            true,
-            &Duration { millis: 1 },
-        );
-        assert!(
-            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("timed out")),
-            "expected timeout, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_action_run_spawn_failure() {
-        // Use a directory as "binary" - exists but cannot be spawned as a process
-        let dir = tempfile::tempdir().unwrap();
-        let argv: Vec<String> = vec![];
-        let result = action_run(
-            dir.path().to_str().unwrap(),
-            &argv,
-            false,
-            &Duration { millis: 5000 },
-        );
-        assert!(
-            matches!(&result, Err(GuardError::Action(msg)) if msg.contains("cannot spawn")),
-            "expected spawn failure, got {result:?}"
         );
     }
 
@@ -1669,56 +763,6 @@ mod tests {
 
         let result = action_list_dir(dir.path().to_str().unwrap(), &config.roots, &config);
         assert!(result.is_ok());
-    }
-
-    // -----------------------------------------------------------------------
-    // Tests for execute_run
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_execute_run_with_run_action() {
-        // Child = this test binary re-exec'd to run `subprocess_helper_success`.
-        let bin_path = test_binary_path();
-
-        let config = Config::default();
-        let rule = Rule {
-            action: Action::Run {
-                binary: bin_path.to_str().unwrap().into(),
-                args: test_binary_args("actions::tests::subprocess_helper_success"),
-                timeout: Duration { millis: 5000 },
-            },
-            command: None,
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![],
-        };
-        let result = execute_run(&config, &rule, &[], &HashMap::new(), &[]);
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[test]
-    fn test_execute_run_wrong_action_type() {
-        let config = Config::default();
-        let rule = Rule {
-            action: Action::ShowHelp,
-            command: Some("help".into()),
-            implicit_symlinks: true,
-            arg_style: ArgStyle::GnuLong,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec![],
-            subcommands: vec![],
-        };
-        let result = execute_run(&config, &rule, &[], &HashMap::new(), &[]);
-        assert!(
-            matches!(&result, Err(GuardError::Action(msg)) if msg == "expected Run action"),
-            "expected 'expected Run action' error, got {result:?}"
-        );
     }
 
     // -----------------------------------------------------------------------
@@ -2193,7 +1237,7 @@ action = {{ type = "show_help" }}
         let rule = Rule {
             action: Action::Run {
                 binary: bin_path.to_str().unwrap().into(),
-                args: test_binary_args("actions::tests::subprocess_helper_success"),
+                args: test_binary_args("kinds::run::tests::subprocess_helper_success"),
                 timeout: Duration { millis: 5000 },
             },
             command: None,
@@ -2380,89 +1424,6 @@ action = {{ type = "show_help" }}
         let result = execute(&config, &rule, &[], &captures, &[]);
         assert_eq!(result.unwrap(), 0);
     }
-    #[test]
-    fn test_substitute_plain_name() {
-        let mut captures = HashMap::new();
-        captures.insert("depth".to_string(), "2".to_string());
-        let result = substitute_arg_template("-d{depth}", &captures).unwrap();
-        assert_eq!(result, "-d2");
-    }
-
-    #[test]
-    fn test_substitute_multiple_placeholders() {
-        let mut captures = HashMap::new();
-        captures.insert("unit".to_string(), "sshd".to_string());
-        let result = substitute_arg_template("{unit}.service", &captures).unwrap();
-        assert_eq!(result, "sshd.service");
-    }
-
-    #[test]
-    fn test_substitute_default_used_when_capture_missing() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template("{depth:-1}", &captures).unwrap();
-        assert_eq!(result, "1");
-    }
-
-    #[test]
-    fn test_substitute_capture_wins_over_default() {
-        let mut captures = HashMap::new();
-        captures.insert("depth".to_string(), "3".to_string());
-        let result = substitute_arg_template("{depth:-1}", &captures).unwrap();
-        assert_eq!(result, "3");
-    }
-
-    #[test]
-    fn test_substitute_missing_capture_no_default_fails() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template("-d{depth}", &captures);
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("missing capture 'depth'"), "{err}");
-    }
-
-    #[test]
-    fn test_substitute_literal_without_placeholders() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template("--no-pager", &captures).unwrap();
-        assert_eq!(result, "--no-pager");
-    }
-
-    #[test]
-    fn test_substitute_unclosed_brace_is_literal() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template("we{ird", &captures).unwrap();
-        assert_eq!(result, "we{ird");
-    }
-
-    #[test]
-    fn test_substitute_escaped_brace_is_literal() {
-        let mut captures = HashMap::new();
-        captures.insert("depth".to_string(), "2".to_string());
-        // \{ stays a literal '{' even with a matching '}' later.
-        let result = substitute_arg_template(r"\{depth}", &captures).unwrap();
-        assert_eq!(result, "{depth}");
-    }
-
-    #[test]
-    fn test_substitute_escaped_brace_mixed_with_placeholder() {
-        let mut captures = HashMap::new();
-        captures.insert("depth".to_string(), "2".to_string());
-        let result = substitute_arg_template(r"-d{depth} \{literal\}", &captures).unwrap();
-        assert_eq!(result, "-d2 {literal}");
-    }
-
-    #[test]
-    fn test_substitute_escaped_backslash() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template(r"a\\b\{x}", &captures).unwrap();
-        assert_eq!(result, r"a\b{x}");
-    }
-
-    #[test]
-    fn test_substitute_trailing_backslash_is_literal() {
-        let captures = HashMap::new();
-        let result = substitute_arg_template("path\\", &captures).unwrap();
-        assert_eq!(result, "path\\");
-    }
 
     #[test]
     fn test_lookup_capture_rejects_escaped_brace_reference() {
@@ -2482,53 +1443,5 @@ action = {{ type = "show_help" }}
         assert!(lookup_capture(&captures, r"{path\}").is_none());
         assert!(lookup_capture(&captures, r"\\{path}").is_none());
         assert!(lookup_capture(&captures, "{pa}th}").is_none());
-    }
-
-    #[test]
-    fn test_build_command_substitutes_action_args_and_pre_args() {
-        let mut rule = make_simple_rule();
-        if let Action::Run { args, .. } = &mut rule.action {
-            args.clear();
-            args.push("-d{depth:-2}".into());
-        }
-        rule.args = vec!["{any}".into()];
-        rule.subcommands = vec![Subcommand {
-            name: "top".into(),
-            arg_style: None,
-            flag_groups: vec![],
-            flags: vec![],
-            args: vec![],
-            pre_args: vec!["--root={root:-/srv}".into()],
-            subcommands: vec![],
-        }];
-
-        let mut captures = HashMap::new();
-        captures.insert("root".to_string(), "/data".to_string());
-
-        let user_argv = vec!["journalctl".to_string(), "top".to_string()];
-        let result =
-            build_command_argv(&rule, &["top".to_string()], &user_argv, &captures).unwrap();
-        assert_eq!(
-            result,
-            vec![
-                "-d2".to_string(),
-                "top".to_string(),
-                "--root=/data".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_command_missing_capture_is_error() {
-        let mut rule = make_simple_rule();
-        if let Action::Run { args, .. } = &mut rule.action {
-            args.clear();
-            args.push("-d{depth}".into());
-        }
-        rule.args = vec!["{any}".into()];
-
-        let user_argv = vec!["journalctl".to_string(), "/var".to_string()];
-        let result = build_command_argv(&rule, &[], &user_argv, &HashMap::new());
-        assert!(result.is_err());
     }
 }
