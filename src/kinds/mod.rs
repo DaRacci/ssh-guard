@@ -3,6 +3,7 @@ pub(crate) mod read_file;
 pub(crate) mod run;
 pub(crate) mod show_help;
 pub(crate) mod stat_path;
+pub(crate) mod support;
 pub(crate) mod tail_file;
 
 use std::collections::HashMap;
