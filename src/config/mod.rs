@@ -462,38 +462,11 @@ fn validate_action_captures(
     capture_paths: &[CapturePath],
     errors: &mut Vec<String>,
 ) {
-    let mut references: Vec<(&str, &str)> = match &rule.action {
-        Action::ReadFile {
-            path_capture,
-            root_set,
-        }
-        | Action::StatPath {
-            path_capture,
-            root_set,
-        }
-        | Action::ListDir {
-            path_capture,
-            root_set,
-        } => {
-            validate_root_set(root_set, available_root_sets, index, scope, errors);
-            vec![("path_capture", path_capture.as_str())]
-        }
-        Action::TailFile {
-            path_capture,
-            lines_capture,
-            root_set,
-            ..
-        } => {
-            validate_root_set(root_set, available_root_sets, index, scope, errors);
-            let mut refs = vec![("path_capture", path_capture.as_str())];
-            if let Some(lines_capture) = lines_capture {
-                refs.push(("lines_capture", lines_capture.as_str()));
-            }
-            refs
-        }
-        Action::Run { .. } | Action::ShowHelp => return,
-    };
-    references.shrink_to_fit();
+    let kind = crate::kinds::kind_for(&rule.action);
+    for root_set in kind.root_sets() {
+        validate_root_set(root_set, available_root_sets, index, scope, errors);
+    }
+    let references = kind.capture_refs();
 
     for (field, reference) in references {
         let name = reference
@@ -1546,6 +1519,24 @@ args = ["{user:string}"]
         assert!(err.contains("subcommand 'alpha'"), "got: {err}");
         assert!(err.contains("path alpha"), "got: {err}");
         assert!(err.contains("missing capture 'user'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_tail_file_lines_capture_ref_checked() {
+        let toml_str = r#"
+[[rules]]
+command = "logs"
+args = ["{path:string}"]
+action = { type = "tail_file", path_capture = "path", lines_capture = "n", root_set = "roots" }
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        let errors = cfg.validation_errors();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("lines_capture") && e.contains("'n'")),
+            "{errors:?}"
+        );
     }
 
     #[test]
