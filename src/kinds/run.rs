@@ -9,7 +9,7 @@ use crate::config::duration::Duration;
 use crate::config::rule::Rule;
 use crate::config::subcommand::Subcommand;
 use crate::errors::GuardError;
-use crate::kinds::{ExecCtx, RuleKind};
+use crate::kinds::{EnvCtx, ExecCtx, RuleKind};
 
 pub(super) struct Run<'a> {
     pub(super) binary: &'a str,
@@ -20,6 +20,53 @@ pub(super) struct Run<'a> {
 impl RuleKind for Run<'_> {
     fn name(&self) -> &'static str {
         "run"
+    }
+
+    fn validate_env(&self, ctx: &EnvCtx<'_>, errors: &mut Vec<String>) {
+        let path = Path::new(self.binary);
+        if !path.is_absolute() {
+            return;
+        }
+
+        if !ctx.rule.implicit_symlinks {
+            match std::fs::symlink_metadata(self.binary) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    match path.canonicalize() {
+                        Ok(resolved) => {
+                            errors.push(format!(
+                                "{} rule[{}]: binary '{}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
+                                ctx.scope,
+                                ctx.index,
+                                self.binary,
+                                resolved.display()
+                            ));
+                        }
+                        Err(_) => {
+                            errors.push(format!(
+                                "{} rule[{}]: binary '{}' is a symlink and cannot be resolved (implicit_symlinks disabled)",
+                                ctx.scope, ctx.index, self.binary
+                            ));
+                        }
+                    }
+                    return;
+                }
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    errors.push(format!(
+                        "{} rule[{}]: cannot stat binary '{}': {}",
+                        ctx.scope, ctx.index, self.binary, error
+                    ));
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if !path.exists() {
+            errors.push(format!(
+                "{} rule[{}]: binary '{}' does not exist",
+                ctx.scope, ctx.index, self.binary
+            ));
+        }
     }
 
     fn execute(&self, ctx: &ExecCtx<'_>) -> Result<i32, GuardError> {

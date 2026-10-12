@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use crate::{
-    config::{Config, action::Action, rule::Rule},
+    config::{Config, rule::Rule},
     errors::GuardError,
 };
 
@@ -10,11 +10,11 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
     println!("Validating config: {config_path}");
 
     let mut errors = cfg.validation_errors();
-    validate_run_binary_paths(&cfg.rules, "base", &mut errors);
+    validate_rules_env(&cfg.rules, "base", &mut errors);
 
     for (pname, profile) in &cfg.profiles {
         if let Some(ref rules) = profile.rules {
-            validate_run_binary_paths(rules, &format!("profile '{pname}'"), &mut errors);
+            validate_rules_env(rules, &format!("profile '{pname}'"), &mut errors);
         }
     }
 
@@ -43,41 +43,10 @@ pub(crate) fn validate(config_path: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn validate_run_binary_paths(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
+fn validate_rules_env(rules: &[Rule], scope: &str, errors: &mut Vec<String>) {
     for (index, rule) in rules.iter().enumerate() {
-        if let Action::Run { binary, .. } = &rule.action {
-            let path = std::path::Path::new(binary);
-            if !path.is_absolute() {
-                continue;
-            }
-            if !path.exists() {
-                errors.push(format!(
-                    "{scope} rule[{index}]: binary '{binary}' does not exist"
-                ));
-            } else if !rule.implicit_symlinks {
-                match std::fs::symlink_metadata(binary) {
-                    Ok(meta) if meta.file_type().is_symlink() => match path.canonicalize() {
-                        Ok(resolved) => {
-                            errors.push(format!(
-                                "{scope} rule[{index}]: binary '{binary}' is a symlink → '{}' (implicit_symlinks disabled). Set implicit_symlinks=true or use the real path.",
-                                resolved.display()
-                            ));
-                        }
-                        Err(_) => {
-                            errors.push(format!(
-                                "{scope} rule[{index}]: binary '{binary}' is a symlink and cannot be resolved (implicit_symlinks disabled)"
-                            ));
-                        }
-                    },
-                    Err(error) => {
-                        errors.push(format!(
-                            "{scope} rule[{index}]: cannot stat binary '{binary}': {error}"
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let ctx = crate::kinds::EnvCtx { rule, scope, index };
+        crate::kinds::kind_for(&rule.action).validate_env(&ctx, errors);
     }
 }
 
@@ -407,7 +376,7 @@ implicit_symlinks = false
         );
     }
 
-    /// Dangling symlink: `exists()` returns false first → "does not exist" error.
+    /// Dangling symlink with `implicit_symlinks=false` should fail closed.
     #[test]
     fn test_validate_dangling_symlink_implicit_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -429,8 +398,34 @@ implicit_symlinks = false
         assert!(result.is_err(), "expected Err for dangling symlink");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("does not exist"),
-            "expected 'does not exist' for dangling symlink, got: {err}"
+            err.contains("symlink") && err.contains("cannot be resolved"),
+            "expected unresolved symlink error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_env_rejects_dangling_symlink_via_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let link_path = dir.path().join("dangling_binary");
+        std::os::unix::fs::symlink("/nonexistent/target/12345", &link_path).unwrap();
+
+        let config_path = dir.path().join("config.toml");
+        let toml = format!(
+            r#"
+[[rules]]
+action = {{ type = "run", binary = "{link}", args = [] }}
+implicit_symlinks = false
+"#,
+            link = link_path.display()
+        );
+        std::fs::write(&config_path, &toml).unwrap();
+
+        let result = validate(config_path.to_str().unwrap());
+        assert!(result.is_err(), "expected Err for dangling symlink");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("is a symlink and cannot be resolved (implicit_symlinks disabled)"),
+            "expected unresolved symlink error, got: {err}"
         );
     }
 
