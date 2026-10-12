@@ -24,7 +24,6 @@
   outputs =
     inputs@{ flake-parts, self, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      debug = true;
       imports = [
         inputs.devenv.flakeModule
         inputs.treefmt.flakeModule

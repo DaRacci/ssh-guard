@@ -32,7 +32,8 @@ let
   tomlFormat = pkgs.formats.toml { };
 
   auditLog = cfg.settings.global.audit_log or "/var/log/ssh-guard-audit.log";
-  defaultPackage = if self != null then self.packages.${pkgs.system}.default or null else null;
+  defaultPackage =
+    if self != null then self.packages.${pkgs.stdenv.hostPlatform.system}.default or null else null;
   profileEffectiveUsers = mapAttrs' (pName: p: nameValuePair pName p.users) cfg.profiles;
   allUsernames = lib.concatLists (attrValues profileEffectiveUsers);
 
@@ -90,7 +91,8 @@ in
     package = mkOption {
       type = types.nullOr types.package;
       default = defaultPackage;
-      defaultText = if self != null then "self.packages.\${pkgs.system}.default" else "null";
+      defaultText =
+        if self != null then "self.packages.\${pkgs.stdenv.hostPlatform.system}.default" else "null";
       description = "ssh-guard package to use for ForceCommand.";
       example = literalExpression "pkgs.ssh-guard";
     };
@@ -238,7 +240,7 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    environment.etc."ssh-guard/config.toml".source =
+    environment.etc."ssh_guard/config.toml".source =
       tomlFormat.generate "ssh-guard-config.toml" finalConfig;
 
     systemd.tmpfiles.rules = [

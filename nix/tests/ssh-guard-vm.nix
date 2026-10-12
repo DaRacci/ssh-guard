@@ -3,7 +3,7 @@
 let
   inherit (pkgs) testers;
 
-  sshGuardPackage = self.packages.${pkgs.system}.default;
+  sshGuardPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
   sshGuardModule = import ../modules/nixos/ssh-guard.nix { inherit self; };
 
   clientKey =

@@ -25,5 +25,3 @@ Expected account access:
 - permission to run `systemctl` read-only commands
 - permission to read journal entries for listed units
 - on many distros, journal access means root or membership in `systemd-journal`
-
-If you need more units, extend `[contracts.unit]` rather than opening `systemctl` broadly.
