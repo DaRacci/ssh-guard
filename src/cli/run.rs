@@ -136,8 +136,9 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
-    use super::run;
+    use super::{current_user, run};
     use std::io::Write;
 
     /// Write a config with a single `run` rule whose `command` is `true` and
@@ -195,15 +196,20 @@ action = {{ type = "show_help" }}
         let cfg = write_run_rule_config(&audit_path);
         let path = cfg.path().to_str().unwrap().to_string();
 
-        temp_env::with_var("USER", Some("testuser"), || {
-            temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
-                let code = run(&path).unwrap();
-                assert_eq!(code, 0);
-            });
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
+            let code = run(&path).unwrap();
+            assert_eq!(code, 0);
         });
 
+        // `current_user()` resolves the OS user (not the `USER` env var), so
+        // assert the resolved value is plumbed through rather than setting an
+        // ineffective `USER`.
         let contents = std::fs::read_to_string(&audit_path).unwrap();
         assert_eq!(contents.lines().count(), 2, "audit: {contents}");
+        assert!(
+            contents.contains(&format!("\"user\":\"{}\"", current_user())),
+            "audit must carry the resolved user: {contents}"
+        );
         let mut lines = contents.lines();
         assert!(
             lines.next().unwrap().contains("\"started\""),
@@ -222,19 +228,21 @@ action = {{ type = "show_help" }}
         let cfg = write_run_rule_config(&audit_path);
         let path = cfg.path().to_str().unwrap().to_string();
 
-        temp_env::with_var("USER", Some("testuser"), || {
-            temp_env::with_var(
-                "SSH_ORIGINAL_COMMAND",
-                Some("definitely-not-a-command"),
-                || {
-                    assert!(run(&path).is_err());
-                },
-            );
-        });
+        temp_env::with_var(
+            "SSH_ORIGINAL_COMMAND",
+            Some("definitely-not-a-command"),
+            || {
+                assert!(run(&path).is_err());
+            },
+        );
 
         let contents = std::fs::read_to_string(&audit_path).unwrap();
         assert_eq!(contents.lines().count(), 1, "audit: {contents}");
         assert!(contents.contains("\"denied\""), "audit: {contents}");
+        assert!(
+            contents.contains(&format!("\"user\":\"{}\"", current_user())),
+            "audit must carry the resolved user: {contents}"
+        );
     }
 
     #[test]
@@ -244,11 +252,9 @@ action = {{ type = "show_help" }}
         let cfg = write_show_help_config(&audit_path);
         let path = cfg.path().to_str().unwrap().to_string();
 
-        temp_env::with_var("USER", Some("testuser"), || {
-            temp_env::with_var("SSH_ORIGINAL_COMMAND", Some(""), || {
-                let code = run(&path).unwrap();
-                assert_eq!(code, 0);
-            });
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some(""), || {
+            let code = run(&path).unwrap();
+            assert_eq!(code, 0);
         });
 
         let contents = std::fs::read_to_string(&audit_path).unwrap();
@@ -261,6 +267,10 @@ action = {{ type = "show_help" }}
         assert!(
             contents.contains("(empty - help shown)"),
             "command field must be preserved as `(empty - help shown)`: {contents}"
+        );
+        assert!(
+            contents.contains(&format!("\"user\":\"{}\"", current_user())),
+            "audit must carry the resolved user: {contents}"
         );
     }
 

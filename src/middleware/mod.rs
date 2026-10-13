@@ -69,6 +69,7 @@ impl Chain {
                 return Decision::Deny(r);
             }
         }
+
         Decision::Continue
     }
 
@@ -96,14 +97,37 @@ mod tests {
 
     #[derive(Debug, PartialEq)]
     enum Call {
-        Request,
-        Match,
+        Request(&'static str),
+        Match(&'static str),
         Outcome(String),
     }
 
     struct Recorder {
+        label: &'static str,
         calls: Arc<Mutex<Vec<Call>>>,
+        deny_request: bool,
         deny_match: bool,
+    }
+
+    impl Recorder {
+        fn new(label: &'static str, calls: &Arc<Mutex<Vec<Call>>>) -> Self {
+            Self {
+                label,
+                calls: calls.clone(),
+                deny_request: false,
+                deny_match: false,
+            }
+        }
+
+        fn denying_request(mut self) -> Self {
+            self.deny_request = true;
+            self
+        }
+
+        fn denying_match(mut self) -> Self {
+            self.deny_match = true;
+            self
+        }
     }
 
     impl Middleware for Recorder {
@@ -112,12 +136,16 @@ mod tests {
         }
 
         fn on_request(&self, _s: &Session<'_>) -> Decision {
-            self.calls.lock().unwrap().push(Call::Request);
-            Decision::Continue
+            self.calls.lock().unwrap().push(Call::Request(self.label));
+            if self.deny_request {
+                Decision::Deny("nope".into())
+            } else {
+                Decision::Continue
+            }
         }
 
         fn on_match(&self, _s: &Session<'_>, _m: &MatchInfo<'_>) -> Decision {
-            self.calls.lock().unwrap().push(Call::Match);
+            self.calls.lock().unwrap().push(Call::Match(self.label));
             if self.deny_match {
                 Decision::Deny("nope".into())
             } else {
@@ -130,7 +158,10 @@ mod tests {
                 Outcome::Allowed { .. } => "allowed".to_string(),
                 Outcome::Denied { reason, .. } => format!("denied:{reason}"),
             };
-            self.calls.lock().unwrap().push(Call::Outcome(tag));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(Call::Outcome(format!("{}:{tag}", self.label)));
         }
     }
 
@@ -153,34 +184,42 @@ mod tests {
     #[test]
     fn test_chain_on_match_short_circuits_on_deny() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let denier = Recorder {
-            calls: calls.clone(),
-            deny_match: true,
-        };
-        let after = Recorder {
-            calls: calls.clone(),
-            deny_match: false,
-        };
-        let chain = Chain::new(vec![Box::new(denier), Box::new(after)]);
+        let chain = Chain::new(vec![
+            Box::new(Recorder::new("a", &calls).denying_match()),
+            Box::new(Recorder::new("b", &calls)),
+        ]);
 
         let decision = chain.on_match(&session(), &info());
         assert!(matches!(decision, Decision::Deny(r) if r == "nope"));
         // second middleware's on_match must NOT run
-        assert_eq!(*calls.lock().unwrap(), vec![Call::Match]);
+        assert_eq!(*calls.lock().unwrap(), vec![Call::Match("a")]);
+    }
+
+    #[test]
+    fn test_chain_on_match_passes_when_all_continue() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let chain = Chain::new(vec![
+            Box::new(Recorder::new("a", &calls)),
+            Box::new(Recorder::new("b", &calls)),
+        ]);
+
+        assert!(matches!(
+            chain.on_match(&session(), &info()),
+            Decision::Continue
+        ));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![Call::Match("a"), Call::Match("b")]
+        );
     }
 
     #[test]
     fn test_chain_on_outcome_runs_all_in_order() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let a = Recorder {
-            calls: calls.clone(),
-            deny_match: false,
-        };
-        let b = Recorder {
-            calls: calls.clone(),
-            deny_match: false,
-        };
-        let chain = Chain::new(vec![Box::new(a), Box::new(b)]);
+        let chain = Chain::new(vec![
+            Box::new(Recorder::new("a", &calls)),
+            Box::new(Recorder::new("b", &calls)),
+        ]);
 
         chain.on_outcome(
             &session(),
@@ -189,25 +228,36 @@ mod tests {
                 detail: "d",
             },
         );
+        // Distinct labels prove execution order, not merely the call count.
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
-                Call::Outcome("allowed".into()),
-                Call::Outcome("allowed".into())
+                Call::Outcome("a:allowed".into()),
+                Call::Outcome("b:allowed".into())
             ]
         );
     }
 
     #[test]
+    fn test_chain_on_request_short_circuits_on_deny() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let chain = Chain::new(vec![
+            Box::new(Recorder::new("a", &calls).denying_request()),
+            Box::new(Recorder::new("b", &calls)),
+        ]);
+
+        let decision = chain.on_request(&session());
+        assert!(matches!(decision, Decision::Deny(r) if r == "nope"));
+        // second middleware's on_request must NOT run
+        assert_eq!(*calls.lock().unwrap(), vec![Call::Request("a")]);
+    }
+
+    #[test]
     fn test_chain_on_request_passes_when_all_continue() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let a = Recorder {
-            calls: calls.clone(),
-            deny_match: false,
-        };
-        let chain = Chain::new(vec![Box::new(a)]);
+        let chain = Chain::new(vec![Box::new(Recorder::new("a", &calls))]);
 
         assert!(matches!(chain.on_request(&session()), Decision::Continue));
-        assert_eq!(*calls.lock().unwrap(), vec![Call::Request]);
+        assert_eq!(*calls.lock().unwrap(), vec![Call::Request("a")]);
     }
 }
