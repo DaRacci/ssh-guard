@@ -52,9 +52,9 @@ impl RuleKind for Run<'_> {
                 }
                 Err(_) => {
                     errors.push(format!(
-                            "{} rule[{}]: binary '{}' is a symlink and cannot be resolved",
-                            ctx.scope, ctx.index, self.binary
-                        ));
+                        "{} rule[{}]: binary '{}' is a symlink and cannot be resolved",
+                        ctx.scope, ctx.index, self.binary
+                    ));
                 }
             },
             Err(error) => {

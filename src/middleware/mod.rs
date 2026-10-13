@@ -1,4 +1,14 @@
+use crate::config::global::Global;
+
 pub(crate) mod audit;
+
+/// Build the default middleware chain for the `run` path.
+pub(crate) fn default_chain(global: &Global) -> Chain {
+    Chain::new(vec![Box::new(audit::Audit {
+        log: global.audit_log.clone(),
+        format: global.audit_format.clone(),
+    })])
+}
 
 pub(crate) enum Decision {
     Continue,
@@ -12,11 +22,13 @@ pub(crate) struct Session<'a> {
     pub session_id: &'a str,
     pub config_hash: &'a str,
 }
+
 pub(crate) struct MatchInfo<'a> {
     pub rule_index: usize,
     pub subcommand_path: &'a [String],
     pub detail: &'a str,
 }
+
 pub(crate) enum Outcome<'a> {
     Allowed {
         exit_code: i32,
@@ -30,12 +42,15 @@ pub(crate) enum Outcome<'a> {
 
 pub(crate) trait Middleware: Sync {
     fn name(&self) -> &'static str;
+
     fn on_request(&self, _s: &Session<'_>) -> Decision {
         Decision::Continue
     }
+
     fn on_match(&self, _s: &Session<'_>, _m: &MatchInfo<'_>) -> Decision {
         Decision::Continue
     }
+
     fn on_outcome(&self, _s: &Session<'_>, _o: &Outcome<'_>);
 }
 
@@ -95,10 +110,12 @@ mod tests {
         fn name(&self) -> &'static str {
             "recorder"
         }
+
         fn on_request(&self, _s: &Session<'_>) -> Decision {
             self.calls.lock().unwrap().push(Call::Request);
             Decision::Continue
         }
+
         fn on_match(&self, _s: &Session<'_>, _m: &MatchInfo<'_>) -> Decision {
             self.calls.lock().unwrap().push(Call::Match);
             if self.deny_match {
@@ -107,6 +124,7 @@ mod tests {
                 Decision::Continue
             }
         }
+
         fn on_outcome(&self, _s: &Session<'_>, o: &Outcome<'_>) {
             let tag = match o {
                 Outcome::Allowed { .. } => "allowed".to_string(),
