@@ -18,4 +18,5 @@ pub mod errors;
 pub mod help;
 mod kinds;
 pub mod logging;
+mod middleware;
 mod path_security;
