@@ -1,3 +1,5 @@
+pub(crate) mod audit;
+
 pub(crate) enum Decision {
     Continue,
     Deny(String),
