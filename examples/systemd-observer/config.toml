@@ -69,11 +69,3 @@ flags = [
   "-b",
 ]
 args = ["{unit}.service"]
-
-[[rules]]
-command = "help"
-implicit_symlinks = true
-arg_style = "gnu_long"
-
-[rules.action]
-type = "show_help"

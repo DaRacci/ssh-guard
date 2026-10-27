@@ -55,7 +55,7 @@ The config has these top-level sections:
 | -------------------- | ------------------------------ | ----------------------------------------------- |
 | `audit_log` | `/var/log/ssh-guard-audit.log` | File all audit events are appended to. |
 | `audit_format` | `json` | `json` or `logfmt`. |
-| `help_text` | _(empty)_ | Shown when the SSH command is empty. |
+| `help_text` | _(empty)_ | Shown when the SSH command is empty or `help`. Generated help is used when empty. |
 | `log_tag` | `ssh-guard` | Syslog tag for non-audit logging. |
 | `max_read_bytes` | `1048576` | Max bytes a `read_file` action will output. |
 | `max_tail_lines` | `5000` | Hard cap on lines for `tail_file`. |
@@ -88,7 +88,9 @@ Each `[[rules]]` entry has:
 | `tail_file` | `path_capture`, `lines_capture`, `default_lines`, `root_set` | Tails a file. |
 | `stat_path` | `path_capture`, `root_set` | Prints path metadata. |
 | `list_dir` | `path_capture`, `root_set` | Lists a directory. |
-| `show_help` | — | Prints `help_text`. |
+
+`help` and an empty command are handled automatically by the middleware chain.
+They print `global.help_text`, or generated help when `help_text` is empty.
 
 `timeout` accepts strings like `"5s"`, `"5000ms"`, `"2m"`, `"1.5h"`, or a bare integer in milliseconds.
 The Default is set to `5000ms`.

@@ -1,4 +1,4 @@
-use crate::config::global::Global;
+use crate::config::Config;
 
 pub(crate) mod audit;
 pub(crate) mod dry_run;
@@ -8,8 +8,10 @@ pub(crate) mod help;
 ///
 /// Order matters: `DryRun` runs before `Audit` so a dry-run match is audited as
 /// allowed without a `started` record (nothing executes). `Audit` then records
-/// outcomes, and `Help` handles the empty-command request before matching.
-pub(crate) fn default_chain(global: &Global) -> Chain {
+/// outcomes, and `Help` handles the empty-command and raw `help` request before
+/// matching.
+pub(crate) fn default_chain(config: &Config) -> Chain {
+    let global = &config.global;
     Chain::new(vec![
         Box::new(dry_run::DryRun {
             enabled: global.dry_run,
@@ -19,7 +21,7 @@ pub(crate) fn default_chain(global: &Global) -> Chain {
             format: global.audit_format.clone(),
         }),
         Box::new(help::Help {
-            text: global.help_text.clone(),
+            text: crate::help::resolved_help(config),
         }),
     ])
 }

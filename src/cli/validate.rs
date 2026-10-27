@@ -208,7 +208,7 @@ implicit_symlinks = true
             r#"
 [[rules]]
 command = "help"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 "#
         )
         .unwrap();
@@ -233,10 +233,6 @@ implicit_symlinks = true
 command = "cat"
 action = {{ type = "read_file", path_capture = "{{file}}", root_set = "roots" }}
 args = ["{{file:string}}"]
-
-[[rules]]
-command = "help"
-action = {{ type = "show_help" }}
 "#,
             binary.display()
         )
@@ -565,9 +561,6 @@ implicit_symlinks = true
         writeln!(
             tmp,
             r#"
-[[rules]]
-action = {{ type = "show_help" }}
-
 [profiles.admin]
 users = ["alice", "bob"]
 
@@ -596,7 +589,7 @@ users = ["bob", "charlie"]
             r#"
 [[rules]]
 command = "help"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 
 [profiles.admin]
 users = ["admin_user"]

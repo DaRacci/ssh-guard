@@ -1,7 +1,7 @@
 use super::{Decision, Middleware, Outcome, Session};
 
-/// Handles an empty `SSH_ORIGINAL_COMMAND` by printing the configured help text
-/// and short-circuiting the run with a successful exit.
+/// Handles an empty `SSH_ORIGINAL_COMMAND` or a raw `help` request by printing
+/// the resolved help output and short-circuiting the run with a successful exit.
 pub(crate) struct Help {
     pub(crate) text: String,
 }
@@ -12,7 +12,8 @@ impl Middleware for Help {
     }
 
     fn on_request(&self, s: &Session<'_>) -> Decision {
-        if s.command.trim().is_empty() {
+        let command = s.command.trim();
+        if command.is_empty() || command == "help" {
             println!("{}", self.text);
             Decision::Handled {
                 exit_code: 0,
@@ -66,12 +67,37 @@ mod tests {
     }
 
     #[test]
+    fn test_help_handles_raw_help_command() {
+        let help = Help {
+            text: "help".into(),
+        };
+        assert!(matches!(
+            help.on_request(&session("help")),
+            Decision::Handled {
+                exit_code: 0,
+                detail: "show_help"
+            }
+        ));
+    }
+
+    #[test]
     fn test_help_continues_for_non_empty_command() {
         let help = Help {
             text: "help".into(),
         };
         assert!(matches!(
             help.on_request(&session("ls")),
+            Decision::Continue
+        ));
+    }
+
+    #[test]
+    fn test_help_continues_for_help_like_command() {
+        let help = Help {
+            text: "help".into(),
+        };
+        assert!(matches!(
+            help.on_request(&session("help-me")),
             Decision::Continue
         ));
     }

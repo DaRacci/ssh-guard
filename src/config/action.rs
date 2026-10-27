@@ -45,5 +45,8 @@ pub enum Action {
 
         root_set: String,
     },
-    ShowHelp,
+
+    /// Internal placeholder action for tests and fixture configs.
+    #[doc(hidden)]
+    Noop,
 }

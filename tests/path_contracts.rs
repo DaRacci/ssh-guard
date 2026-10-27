@@ -37,7 +37,7 @@ max = 10
 
 [[rules]]
 command = "tail"
-action = { type = "show_help" }
+action = { type = "noop" }
 arg_style = "gnu_long"
 flags = ["--lines={lines}"]
 "#,
@@ -61,7 +61,7 @@ max = 10
 
 [[rules]]
 command = "tail"
-action = { type = "show_help" }
+action = { type = "noop" }
 arg_style = "gnu_long"
 flags = ["--lines={lines}"]
 "#,
@@ -82,7 +82,7 @@ fn test_escaped_braces_in_flags_match_literally() {
         r#"
 [[rules]]
 command = "ps"
-action = { type = "show_help" }
+action = { type = "noop" }
 arg_style = "gnu_long"
 flags = ['--format=\{\{.Names\}\}']
 "#,
@@ -119,7 +119,7 @@ root_set = "roots"
 
 [[rules]]
 command = "cat"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 args = ["{{allowed_path}}"]
 "#,
         toml_path(root.path())
@@ -153,7 +153,7 @@ root_set = "roots"
 
 [[rules]]
 command = "cat"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 args = ["{{allowed_path}}"]
 "#,
         toml_path(root.path())
@@ -193,7 +193,7 @@ must_exist = false
 
 [[rules]]
 command = "write"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 args = ["{{output_path}}"]
 "#,
         toml_path(root.path())
@@ -233,7 +233,7 @@ must_exist = false
 
 [[rules]]
 command = "write"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 args = ["{{output_path}}"]
 "#,
         toml_path(root.path())
@@ -278,7 +278,7 @@ must_exist = false
 
 [[rules]]
 command = "write"
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 args = ["{{output_path}}"]
 "#,
         toml_path(root.path())
@@ -310,7 +310,7 @@ root_set = "missing"
 
 [[rules]]
 command = "cat"
-action = { type = "show_help" }
+action = { type = "noop" }
 args = ["{allowed_path}"]
 "#,
     )
@@ -326,7 +326,7 @@ fn test_profile_path_contract_with_profile_root_set_passes_validation() {
         r#"
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.deploy]
 users = ["deploy"]
@@ -340,7 +340,7 @@ root_set = "release"
 
 [[profiles.deploy.rules]]
 command = "show-release"
-action = { type = "show_help" }
+action = { type = "noop" }
 args = ["{release_path}"]
 "#,
     )

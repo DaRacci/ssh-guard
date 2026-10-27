@@ -199,19 +199,4 @@ mod tests {
         let result = execute(&config, &rule, &[], &captures, &[]);
         assert_eq!(result.unwrap(), 0);
     }
-
-    #[test]
-    fn test_execute_dispatches_show_help() {
-        let config = Config {
-            global: Global {
-                help_text: "help\n".into(),
-                ..Global::default()
-            },
-            ..Default::default()
-        };
-        let rule = rule(Action::ShowHelp, Some("help"));
-        let captures = HashMap::new();
-        let result = execute(&config, &rule, &[], &captures, &[]);
-        assert_eq!(result.unwrap(), 0);
-    }
 }

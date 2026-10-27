@@ -176,8 +176,17 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     }
 
     lines.extend(render_roots(config, opts));
-    lines.push(String::new());
     lines.join("\n")
+}
+
+/// Configured `help_text`, or generated help when it is empty.
+pub(crate) fn resolved_help(config: &Config) -> String {
+    let text = config.global.help_text.trim();
+    if text.is_empty() {
+        render_help(config, &HelpOptions::default())
+    } else {
+        text.to_string()
+    }
 }
 
 /// Filesystem root sets that bound file/path actions, rendered when any are set;
@@ -570,6 +579,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
+    use crate::config::global::Global;
     use crate::config::rule::Rule;
     use crate::config::subcommand::Subcommand;
 
@@ -1027,12 +1037,12 @@ mod tests {
     }
 
     #[test]
-    fn test_render_help_skips_show_help_line() {
+    fn test_render_help_skips_hidden_rule() {
         let config = Config {
             rules: vec![
                 run_rule("systemctl", vec![], vec![]),
                 Rule {
-                    action: Action::ShowHelp,
+                    action: Action::Noop,
                     command: Some("help".into()),
                     implicit_symlinks: true,
                     arg_style: ArgStyle::GnuLong,
@@ -1050,8 +1060,33 @@ mod tests {
         assert!(out.lines().any(|line| line == "systemctl"), "got: {out}");
         assert!(
             !out.lines().any(|line| line.trim() == "help"),
-            "show_help rule should be skipped, got: {out}"
+            "hidden rule should be skipped, got: {out}"
         );
+    }
+
+    #[test]
+    fn test_resolved_help_prefers_configured_text() {
+        let config = Config {
+            global: Global {
+                help_text: "custom help\n".into(),
+                ..Global::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(resolved_help(&config), "custom help");
+    }
+
+    #[test]
+    fn test_resolved_help_generates_when_help_text_empty() {
+        let config = Config {
+            rules: vec![run_rule("systemctl", vec![], vec![])],
+            ..Default::default()
+        };
+
+        let out = resolved_help(&config);
+        assert!(out.contains("Allowed commands:"), "got: {out}");
+        assert!(out.contains("systemctl"), "got: {out}");
     }
 
     #[test]

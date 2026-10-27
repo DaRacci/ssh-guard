@@ -6,7 +6,7 @@ use ssh_guard::engine::match_command;
 fn journalctl_config() -> config::Config {
     let value = toml::toml! {
         [[rules]]
-        action = { type = "show_help" }
+        action = { type = "noop" }
         command = "journalctl"
         implicit_symlinks = true
         arg_style = "gnu_long"
@@ -22,7 +22,7 @@ fn journalctl_config() -> config::Config {
         args = ["{unit}"]
 
         [[rules]]
-        action = { type = "show_help" }
+        action = { type = "noop" }
         command = "systemctl"
         implicit_symlinks = true
         arg_style = "gnu_long"
@@ -37,7 +37,7 @@ fn journalctl_config() -> config::Config {
         args = ["{string}"]
 
         [[rules]]
-        action = { type = "show_help" }
+        action = { type = "noop" }
         command = "df"
         implicit_symlinks = true
         arg_style = "gnu_long"

@@ -67,7 +67,7 @@ impl GlobalOverride {
 /// [profiles.admin.global]
 /// audit_log = "/var/log/admin-audit.log"
 /// [[profiles.admin.rules]]
-/// action = { type = "show_help" }
+/// action = { type = "run", binary = "/bin/ls" }
 /// ```
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Profile {

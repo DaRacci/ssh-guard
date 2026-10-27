@@ -1,16 +1,17 @@
+//! This module defines a Noop rule kind, primarily for testing purposes.
+
 pub(crate) mod list_dir;
 pub(crate) mod read_file;
 pub(crate) mod run;
-pub(crate) mod show_help;
 pub(crate) mod stat_path;
 pub(crate) mod support;
 pub(crate) mod tail_file;
 
 use std::collections::HashMap;
 
-use crate::config::Config;
 use crate::config::action::Action;
 use crate::config::rule::Rule;
+use crate::config::Config;
 use crate::errors::GuardError;
 
 pub(crate) struct ExecCtx<'a> {
@@ -87,7 +88,23 @@ pub(crate) fn kind_for(action: &Action) -> Box<dyn RuleKind + '_> {
             path_capture,
             root_set,
         }),
-        Action::ShowHelp => Box::new(show_help::ShowHelp),
+        Action::Noop => Box::new(Noop),
+    }
+}
+
+struct Noop;
+
+impl RuleKind for Noop {
+    fn name(&self) -> &'static str {
+        "noop"
+    }
+
+    fn visible_in_help(&self) -> bool {
+        false
+    }
+
+    fn execute(&self, _ctx: &ExecCtx<'_>) -> Result<i32, GuardError> {
+        Ok(0)
     }
 }
 
@@ -117,13 +134,6 @@ mod tests {
             .name(),
             "read_file"
         );
-        assert_eq!(kind_for(&Action::ShowHelp).name(), "show_help");
-    }
-
-    #[test]
-    fn test_show_help_hidden_from_help() {
-        assert!(!kind_for(&Action::ShowHelp).visible_in_help());
-        assert!(kind_for(&run_action()).visible_in_help());
     }
 
     #[test]

@@ -312,7 +312,7 @@ mod tests {
         create_config(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
     }
@@ -773,7 +773,7 @@ args = ["sshd.service"]
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["admin_user"]
@@ -809,7 +809,7 @@ users = ["admin_user"]
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["admin_user"]
@@ -857,7 +857,7 @@ flags = ["--no-pager", "--since", "--full"]
         let (_dir, path) = create_config(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["admin_user"]

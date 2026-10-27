@@ -199,7 +199,7 @@ roots = ["{}"]
 data = ["{}"]
 
 [[rules]]
-action = {{ type = "show_help" }}
+action = {{ type = "noop" }}
 "#,
             default_root.path().display(),
             data_root.path().display()

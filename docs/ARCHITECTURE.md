@@ -24,7 +24,7 @@ flowchart TD
     S -->|context for hooks| D[Middleware chain]
     D -->|on_request| E[shlex parse + engine match + contract validate]
     E -->|on_match| F[actions::execute]
-    F -->|matched action| K[run / read_file / tail_file / stat_path / list_dir / show_help]
+    F -->|matched action| K[run / read_file / tail_file / stat_path / list_dir]
     I[Audit: receives each hook, returns Continue / Deny / Handled]
     D <-.->|on_request| I
     I <-.->|on_match| E
@@ -48,8 +48,7 @@ flowchart TD
 | `src/middleware/`      | **Layer 2.** `Middleware`, `Chain`, `Decision`, `Session`, `MatchInfo`, `Outcome`, default chain.                               |
 | `src/actions.rs`       | Thin public shim: `execute()` dispatches through the kind registry; test seam for argv building.                                |
 | `src/audit.rs`         | `AuditEvent` / `AuditResult`, JSON and logfmt writers, timestamps, session ids.                                                 |
-| `src/help.rs`          | Generated help renderer for `ssh-guard help` (walks the config rule tree).                                                      |
-| `src/helptext.rs`      | Shared printing of the configured `help_text`.                                                                                  |
+| `src/help.rs`          | Shared help rendering and printing: generated `ssh-guard help` output and the configured `help_text`.                           |
 | `src/logging.rs`       | Syslog (or stderr fallback) logger init; idempotent for repeated `run()` calls.                                                 |
 | `src/path_security.rs` | Canonicalisation + "is this path inside an allowed root" checks.                                                                |
 | `src/errors.rs`        | `GuardError` and `MatchFailure`.                                                                                                |
@@ -174,7 +173,7 @@ DryRun { enabled }  ->  Audit { log, format }  ->  Help { text }
 
 - `DryRun` is first so a dry-run match short-circuits before `Audit`'s `started` event.
 - `Audit` records `started` and outcomes.
-- `Help` handles an empty command in `on_request`.
+- `Help` handles an empty command or a raw `help` in `on_request`.
 
 ### What middleware can and cannot do
 
@@ -233,13 +232,14 @@ pub fn execute(config, rule, subcommand_path, captures, user_argv) -> Result<i32
 }
 ```
 
-## Help: two different things
+## Help
 
-- **Configured `help_text`** — printed when the command is empty (via the
-  `Help` middleware) and by a matched `show_help` rule (via the kind). Shared
-  printing lives in `src/helptext.rs`.
+- **Help output** — printed when the command is empty or exactly `help`,
+  before matching. The `Help` middleware stores the resolved output at chain
+  build time: `global.help_text` when set, otherwise generated help from the
+  effective config (`src/help.rs`, `resolved_help`).
 - **Generated help** — `ssh-guard help` walks the config and renders a usage
-  listing (`src/help.rs` → `cli/help.rs`). It is not used on the SSH path.
+  listing (`src/help.rs` → `cli/help.rs`).
 
 ## Validation layers
 

@@ -50,13 +50,12 @@ fn run_with_chain(
     let user = current_user();
 
     let effective = cfg.resolve_for_user(&user)?;
-    let effective_global = effective.global.clone();
-    logging::init(&effective_global.log_tag)?;
+    logging::init(&effective.global.log_tag)?;
 
     // An unset variable means sshd did not invoke us as a forced command;
     // there is no request to match or audit.
     let raw = std::env::var("SSH_ORIGINAL_COMMAND").map_err(|_| GuardError::NoCommand)?;
-    let chain = chain_override.unwrap_or_else(|| middleware::default_chain(&effective_global));
+    let chain = chain_override.unwrap_or_else(|| middleware::default_chain(&effective));
     let session = middleware::Session {
         user: &user,
         command: &raw,
@@ -226,7 +225,7 @@ binary = "/nonexistent/dry-run-binary"
         cfg
     }
 
-    fn write_show_help_config(audit_path: &str) -> tempfile::NamedTempFile {
+    fn write_help_config(audit_path: &str) -> tempfile::NamedTempFile {
         let mut cfg = tempfile::NamedTempFile::new().unwrap();
         writeln!(
             cfg,
@@ -236,9 +235,6 @@ audit_log = "{audit_path}"
 audit_format = "json"
 log_tag = "ssh-guard-test"
 help_text = "test help shown"
-
-[[rules]]
-action = {{ type = "show_help" }}
 "#
         )
         .unwrap();
@@ -371,7 +367,7 @@ action = {{ type = "show_help" }}
     fn test_run_empty_command_writes_single_allowed_no_started() {
         let audit = tempfile::NamedTempFile::new().unwrap();
         let audit_path = audit.path().to_str().unwrap().to_string();
-        let cfg = write_show_help_config(&audit_path);
+        let cfg = write_help_config(&audit_path);
         let path = cfg.path().to_str().unwrap().to_string();
 
         temp_env::with_var("SSH_ORIGINAL_COMMAND", Some(""), || {
@@ -393,6 +389,27 @@ action = {{ type = "show_help" }}
         assert!(
             contents.contains(&format!("\"user\":\"{}\"", current_user())),
             "audit must carry the resolved user: {contents}"
+        );
+    }
+
+    #[test]
+    fn test_run_raw_help_writes_single_allowed_no_started() {
+        let audit = tempfile::NamedTempFile::new().unwrap();
+        let audit_path = audit.path().to_str().unwrap().to_string();
+        let cfg = write_help_config(&audit_path);
+        let path = cfg.path().to_str().unwrap().to_string();
+
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("help"), || {
+            let code = run(&path).unwrap();
+            assert_eq!(code, 0);
+        });
+
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        assert_eq!(contents.lines().count(), 1, "audit: {contents}");
+        assert!(contents.contains("\"allowed\""), "audit: {contents}");
+        assert!(
+            !contents.contains("\"started\""),
+            "raw-help path must not emit started: {contents}"
         );
     }
 
@@ -439,9 +456,6 @@ action = {{ type = "show_help" }}
 audit_log = "/dev/null"
 log_tag = "ssh-guard-test"
 help_text = "test help"
-
-[[rules]]
-action = {{ type = "show_help" }}
 "#
         )
         .unwrap();
@@ -462,9 +476,6 @@ action = {{ type = "show_help" }}
 audit_log = "/dev/null"
 log_tag = "ssh-guard-test"
 help_text = "test help shown"
-
-[[rules]]
-action = {{ type = "show_help" }}
 "#
         )
         .unwrap();
@@ -490,9 +501,6 @@ action = {{ type = "show_help" }}
 audit_log = "/dev/null"
 log_tag = "ssh-guard-test"
 help_text = "base help"
-
-[[rules]]
-action = {{ type = "show_help" }}
 
 [profiles.admin]
 users = ["admin_user"]

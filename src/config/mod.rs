@@ -816,7 +816,7 @@ mod tests {
     fn test_parse_minimal_config() {
         let toml_str = r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 1);
@@ -930,7 +930,7 @@ max_tail_lines = 1000
 default_tail_lines = 50
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.global.audit_log, "/custom/audit.log");
@@ -960,7 +960,7 @@ min = 3
 max = 32
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.contracts.len(), 3);
@@ -1002,12 +1002,9 @@ action = { type = "stat_path", path_capture = "{path}", root_set = "files" }
 
 [[rules]]
 action = { type = "list_dir", path_capture = "{dir}", root_set = "files" }
-
-[[rules]]
-action = { type = "show_help" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.rules.len(), 6);
+        assert_eq!(cfg.rules.len(), 5);
         assert_eq!(tail_default_lines(&cfg.rules[2].action), Some(50));
     }
 
@@ -1174,7 +1171,7 @@ arg_style = "dos"
 roots = ["/var/log", "/home"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.roots, vec!["/var/log", "/home"]);
@@ -1190,7 +1187,7 @@ data = ["/srv/data", "/srv/shared"]
 logs = ["/srv/log/app"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         let value: toml::Value = toml::from_str(&cfg.to_toml_string().unwrap()).unwrap();
@@ -1370,7 +1367,7 @@ args = ["{string}"]
     fn test_parse_config_with_profiles() {
         let toml_str = r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]
@@ -1461,7 +1458,7 @@ captured = ["--path={missing_contract}"]
 
 [[rules]]
 command = "inspect"
-action = { type = "show_help" }
+action = { type = "noop" }
 flag_groups = ["captured"]
 "#,
         )
@@ -1557,7 +1554,7 @@ args = ["{user:string}"]
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1630,7 +1627,7 @@ roots = ["/srv/data"]
 
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1644,7 +1641,7 @@ action = { type = "show_help" }
             r#"
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1669,7 +1666,7 @@ args = ["{file:string}"]
             r#"
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1724,7 +1721,7 @@ action = { type = "run", binary = "/opt/test/bin/systemctl", args = [] }
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1745,7 +1742,7 @@ audit_log = "/base/log"
 help_text = "base help"
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1762,7 +1759,7 @@ action = { type = "run", binary = "/opt/test/bin/admintool", args = [] }
         assert_eq!(resolved.global.audit_log, "/admin/log");
         assert_eq!(resolved.global.help_text, "base help");
         assert_eq!(resolved.rules.len(), 2);
-        assert!(matches!(resolved.rules[0].action, Action::ShowHelp));
+        assert!(matches!(resolved.rules[0].action, Action::Noop));
         assert!(matches!(resolved.rules[1].action, Action::Run { .. }));
         assert!(resolved.profiles.is_empty());
     }
@@ -1772,7 +1769,7 @@ action = { type = "run", binary = "/opt/test/bin/admintool", args = [] }
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1797,7 +1794,7 @@ users = ["alice"]
 audit_log = "/base/log"
 help_text = "base help"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1822,7 +1819,7 @@ audit_log = "/admin/log"
         let base: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1849,7 +1846,7 @@ action = { type = "show_help" }
 
         let merged = base.merge_profile(&profile);
         assert_eq!(merged.rules.len(), 2);
-        assert!(matches!(merged.rules[0].action, Action::ShowHelp));
+        assert!(matches!(merged.rules[0].action, Action::Noop));
         assert_eq!(merged.rules[1].command_name(), Some("tool"));
     }
 
@@ -1863,7 +1860,7 @@ min = 1024
 max = 65535
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1890,7 +1887,7 @@ max = 9999
             r#"
 roots = ["/base", "/common"]
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1915,7 +1912,7 @@ roots = ["/common", "/profile"]
 logs = ["/base/log", "/shared"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1952,7 +1949,7 @@ data = ["/srv/data"]
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]
@@ -1970,7 +1967,7 @@ users = ["charlie"]
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]

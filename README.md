@@ -11,7 +11,8 @@ and only runs the command if it matches an allowed rule.
 
 - Reads the command from `SSH_ORIGINAL_COMMAND`.
   If the variable is unset, ssh-guard exits with an error.
-- If the command is empty, it prints the configured `help_text` and exits `0`.
+- If the command is empty or `help`, it prints the help output and exits `0`.
+  `help_text` is used when set; otherwise help is generated from the rules.
 - Commands are matched against rules. A match runs the command; a non-match is denied, _everything_ is logged.
 - Rules can be scoped to profiles so different SSH users get different allowed commands.
 - All actions are audited.

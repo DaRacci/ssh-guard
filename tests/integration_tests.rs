@@ -54,7 +54,7 @@ fn test_full_config_round_trip_via_file() {
                 }],
             },
             Rule {
-                action: Action::ShowHelp,
+                action: Action::Noop,
                 command: Some("help".into()),
                 implicit_symlinks: true,
                 arg_style: ArgStyle::GnuLong,
@@ -98,7 +98,7 @@ fn test_full_config_round_trip_via_file() {
 
     let r1 = &loaded.rules[1];
     assert_eq!(r1.command_name(), Some("help"));
-    assert!(matches!(r1.action, Action::ShowHelp));
+    assert!(matches!(r1.action, Action::Noop));
 }
 
 #[test]
@@ -207,7 +207,7 @@ type = "enum"
 values = ["ssh", "nginx", "httpd"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 command = "test"
 "#;
 

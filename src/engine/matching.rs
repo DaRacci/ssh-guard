@@ -597,7 +597,6 @@ mod tests {
                 f
             },
             rules: vec![
-                // Rule 0 - git
                 Rule {
                     action: Action::Run {
                         binary: "/opt/test/bin/git".into(),
@@ -662,9 +661,8 @@ mod tests {
                         },
                     ],
                 },
-                // Rule 1 - help
                 Rule {
-                    action: Action::ShowHelp,
+                    action: Action::Noop,
                     command: Some("help".into()),
                     args: vec![],
                     pre_args: vec![],
@@ -867,7 +865,7 @@ mod tests {
     fn test_contract_int_range_ok() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("bind".into()),
             args: vec!["{port}".into()],
             pre_args: vec![],
@@ -885,7 +883,7 @@ mod tests {
     fn test_contract_int_range_fail() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("bind".into()),
             args: vec!["{port}".into()],
             pre_args: vec![],
@@ -904,7 +902,7 @@ mod tests {
     fn test_contract_enum_ok() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("svc-check".into()),
             args: vec!["{svc}".into()],
             pre_args: vec![],
@@ -922,7 +920,7 @@ mod tests {
     fn test_contract_enum_fail() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("svc-check".into()),
             args: vec!["{svc}".into()],
             pre_args: vec![],
@@ -1074,7 +1072,7 @@ mod tests {
     fn test_match_dos_subcommand_flags() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("tool".into()),
             args: vec![],
             pre_args: vec![],
@@ -1107,7 +1105,7 @@ mod tests {
     fn test_match_posix_short_flags() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("tool".into()),
             args: vec![],
             pre_args: vec![],
@@ -1140,7 +1138,7 @@ mod tests {
     fn test_match_mixed_styles() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("tool".into()),
             args: vec![],
             pre_args: vec![],
@@ -1218,7 +1216,7 @@ mod tests {
     fn test_match_template_context_exact_boundary() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("test".into()),
             args: vec!["--{int}".into()],
             pre_args: vec![],
@@ -1241,7 +1239,7 @@ mod tests {
     fn test_multiple_validation_failures() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("check".into()),
             args: vec!["{port}".into(), "{port}".into()],
             pre_args: vec![],
@@ -1273,7 +1271,7 @@ mod tests {
         let mut cfg = make_config();
         // command_name()=None -> command-name check skipped
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: None,
             args: vec![],
             pre_args: vec![],
@@ -1313,7 +1311,7 @@ mod tests {
     fn test_unexpected_arguments_no_subcommands_no_args() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("simple".into()),
             args: vec![],
             pre_args: vec![],
@@ -1335,7 +1333,7 @@ mod tests {
         // Flag must be at the level where consume_flags runs here, as a top-level
         // flag before the subcommand. This covers the inline consumption in consume_flags (L153-154).
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("dos-tool".into()),
             args: vec![],
             pre_args: vec![],
@@ -1396,7 +1394,7 @@ mod tests {
     fn test_inline_flag_dos_separator_in_args() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("dos-args".into()),
             args: vec!["/level:{int}".into()],
             pre_args: vec![],
@@ -1415,7 +1413,7 @@ mod tests {
     fn test_template_context_empty_capture() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("t-empty".into()),
             // Pattern prefix="--", suffix=None
             args: vec!["--{int}".into()],
@@ -1436,7 +1434,7 @@ mod tests {
     fn test_template_context_suffix_mismatch() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("t-suffix".into()),
             args: vec!["--{string}.service".into()],
             pre_args: vec![],
@@ -1456,7 +1454,7 @@ mod tests {
     fn test_rule_level_args_no_subcommands() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("direct".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1476,7 +1474,7 @@ mod tests {
         // Covers the ':' separator branch in InlineFlag match (Dos style)
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("dos-inline".into()),
             args: vec!["/depth:{int}".into()],
             pre_args: vec![],
@@ -1496,7 +1494,7 @@ mod tests {
     fn test_flag_after_positional_arg() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1514,7 +1512,7 @@ mod tests {
     fn test_flag_then_positional_arg() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1532,7 +1530,7 @@ mod tests {
     fn test_interleaved_flags_and_args() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into(), "{string}".into()],
             pre_args: vec![],
@@ -1577,7 +1575,7 @@ mod tests {
     fn test_disallowed_flag_after_positional_still_denied() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1598,7 +1596,7 @@ mod tests {
     fn test_disallowed_flag_between_args_still_denied() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into(), "{string}".into()],
             pre_args: vec![],
@@ -1623,7 +1621,7 @@ mod tests {
         // -n 3 --no-pager <path>: value flag, standalone flag, then positional
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("tail".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1653,7 +1651,7 @@ mod tests {
     fn test_repeated_flags_anywhere() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
@@ -1674,7 +1672,7 @@ mod tests {
     fn test_flag_eq_value_after_positional() {
         let mut cfg = make_config();
         cfg.rules.push(Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("df".into()),
             args: vec!["{string}".into()],
             pre_args: vec![],
