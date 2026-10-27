@@ -1,4 +1,11 @@
-use crate::{actions, config::Config, engine, errors::GuardError, logging, middleware};
+use crate::{
+    actions,
+    config::Config,
+    engine,
+    errors::GuardError,
+    logging,
+    middleware::{self, Decision},
+};
 
 fn current_user() -> String {
     current_os_user()
@@ -44,33 +51,10 @@ fn run_with_chain(
 
     let effective = cfg.resolve_for_user(&user)?;
     let effective_global = effective.global.clone();
-
     logging::init(&effective_global.log_tag)?;
 
     let raw = std::env::var("SSH_ORIGINAL_COMMAND").map_err(|_| GuardError::NoCommand)?;
-
     let chain = chain_override.unwrap_or_else(|| middleware::default_chain(&effective_global));
-
-    if raw.trim().is_empty() {
-        println!("{}", effective_global.help_text);
-        let session = middleware::Session {
-            user: &user,
-            command: "(empty - help shown)",
-            session_id: &session_id,
-            config_hash: &config_hash,
-        };
-        chain.on_outcome(
-            &session,
-            &middleware::Outcome::Allowed {
-                exit_code: 0,
-                detail: "show_help",
-            },
-        );
-        return Ok(0);
-    }
-
-    let args = shlex::split(&raw).ok_or_else(|| GuardError::ParseCommand(raw.clone()))?;
-
     let session = middleware::Session {
         user: &user,
         command: &raw,
@@ -82,13 +66,23 @@ fn run_with_chain(
         chain.on_outcome(&session, &middleware::Outcome::Denied { reason, failures });
     };
 
-    // Pre-match veto: a middleware may reject the request before any rule is
-    // consulted. Recorded as a denial, with no `started` event (nothing ran).
-    if let middleware::Decision::Deny(reason) = chain.on_request(&session) {
-        deny(&reason, &[]);
-        return Err(Box::new(GuardError::Denied(reason)));
+    // A middleware may veto the request or handle it outright.
+    match chain.on_request(&session) {
+        Decision::Deny(reason) => {
+            deny(&reason, &[]);
+            return Err(Box::new(GuardError::Denied(reason)));
+        }
+        Decision::Handled { exit_code, detail } => {
+            chain.on_outcome(
+                &session,
+                &middleware::Outcome::Allowed { exit_code, detail },
+            );
+            return Ok(exit_code);
+        }
+        Decision::Continue => {}
     }
 
+    let args = shlex::split(&raw).ok_or_else(|| GuardError::ParseCommand(raw.clone()))?;
     let match_result = match engine::match_command(&effective, &args) {
         Ok(m) => m,
         Err(GuardError::NoMatch { failures, .. }) => {
@@ -121,9 +115,20 @@ fn run_with_chain(
         subcommand_path: &match_result.subcommand_path,
         detail: &detail,
     };
-    if let middleware::Decision::Deny(reason) = chain.on_match(&session, &info) {
-        deny(&reason, &[]);
-        return Err(Box::new(GuardError::Denied(reason)));
+
+    match chain.on_match(&session, &info) {
+        Decision::Continue => {}
+        Decision::Deny(reason) => {
+            deny(&reason, &[]);
+            return Err(Box::new(GuardError::Denied(reason)));
+        }
+        Decision::Handled { exit_code, detail } => {
+            chain.on_outcome(
+                &session,
+                &middleware::Outcome::Allowed { exit_code, detail },
+            );
+            return Ok(exit_code);
+        }
     }
 
     let code = match actions::execute(

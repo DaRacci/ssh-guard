@@ -1,18 +1,39 @@
 use crate::config::global::Global;
 
 pub(crate) mod audit;
+pub(crate) mod help;
 
 /// Build the default middleware chain for the `run` path.
+///
+/// Order matters: `Audit` is first so any later veto still has its outcome recorded,
+/// and `Help` handles the empty-command request before matching.
 pub(crate) fn default_chain(global: &Global) -> Chain {
-    Chain::new(vec![Box::new(audit::Audit {
-        log: global.audit_log.clone(),
-        format: global.audit_format.clone(),
-    })])
+    Chain::new(vec![
+        Box::new(audit::Audit {
+            log: global.audit_log.clone(),
+            format: global.audit_format.clone(),
+        }),
+        Box::new(help::Help {
+            text: global.help_text.clone(),
+        }),
+    ])
 }
 
 pub(crate) enum Decision {
+    /// Continue to the next middleware in the chain.
     Continue,
+
+    /// Veto a request or match.
+    ///
+    /// The middleware may log the reason for the denial, but it is not surfaced to the user.
+    #[allow(dead_code)]
     Deny(String),
+
+    /// The middleware handled the request itself and short-circuited the run.
+    Handled {
+        exit_code: i32,
+        detail: &'static str,
+    },
 }
 
 pub(crate) struct Session<'a> {
@@ -65,10 +86,18 @@ impl Chain {
 
     pub(crate) fn on_request(&self, s: &Session<'_>) -> Decision {
         for m in &self.middleware {
-            if let Decision::Deny(r) = m.on_request(s) {
-                let name = m.name();
-                log::debug!("middleware '{name}' denied request");
-                return Decision::Deny(r);
+            match m.on_request(s) {
+                Decision::Continue => {}
+                Decision::Deny(r) => {
+                    let name = m.name();
+                    log::debug!("middleware '{name}' denied request");
+                    return Decision::Deny(r);
+                }
+                handled @ Decision::Handled { .. } => {
+                    let name = m.name();
+                    log::debug!("middleware '{name}' handled request");
+                    return handled;
+                }
             }
         }
 
@@ -77,14 +106,22 @@ impl Chain {
 
     pub(crate) fn on_match(&self, s: &Session<'_>, info: &MatchInfo<'_>) -> Decision {
         for m in &self.middleware {
-            if let Decision::Deny(r) = m.on_match(s, info) {
-                let name = m.name();
-                let path = info.subcommand_path.join("/");
-                log::debug!(
-                    "middleware '{name}' denied rule[{}] via {path}",
-                    info.rule_index
-                );
-                return Decision::Deny(r);
+            match m.on_match(s, info) {
+                Decision::Continue => {}
+                Decision::Deny(r) => {
+                    let name = m.name();
+                    let path = info.subcommand_path.join("/");
+                    log::debug!(
+                        "middleware '{name}' denied rule[{}] via {path}",
+                        info.rule_index
+                    );
+                    return Decision::Deny(r);
+                }
+                handled @ Decision::Handled { .. } => {
+                    let name = m.name();
+                    log::debug!("middleware '{name}' handled rule[{}]", info.rule_index);
+                    return handled;
+                }
             }
         }
         Decision::Continue
@@ -187,6 +224,42 @@ mod tests {
             subcommand_path: &[],
             detail: "d",
         }
+    }
+
+    struct Handler(&'static str);
+
+    impl Middleware for Handler {
+        fn name(&self) -> &'static str {
+            "handler"
+        }
+
+        fn on_request(&self, _s: &Session<'_>) -> Decision {
+            Decision::Handled {
+                exit_code: 0,
+                detail: self.0,
+            }
+        }
+
+        fn on_outcome(&self, _s: &Session<'_>, _o: &Outcome<'_>) {}
+    }
+
+    #[test]
+    fn test_chain_on_request_short_circuits_on_handled() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let chain = Chain::new(vec![
+            Box::new(Handler("show_help")),
+            Box::new(Recorder::new("b", &calls)),
+        ]);
+
+        assert!(matches!(
+            chain.on_request(&session()),
+            Decision::Handled {
+                exit_code: 0,
+                detail: "show_help"
+            }
+        ));
+        // the later middleware must not run
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     #[test]

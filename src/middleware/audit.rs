@@ -7,14 +7,30 @@ pub(crate) struct Audit {
     pub(crate) format: AuditFormat,
 }
 
+/// Audit label for an empty `SSH_ORIGINAL_COMMAND`; the raw value is empty, but
+/// the log keeps a human-readable marker.
+fn audit_command(command: &str) -> &str {
+    if command.trim().is_empty() {
+        "(empty - help shown)"
+    } else {
+        command
+    }
+}
+
 impl Middleware for Audit {
     fn name(&self) -> &'static str {
         "audit"
     }
 
     fn on_match(&self, s: &Session<'_>, m: &MatchInfo<'_>) -> Decision {
-        let _ = AuditEvent::started(s.user, s.command, m.detail, s.config_hash, s.session_id)
-            .write_to(&self.log, &self.format);
+        let _ = AuditEvent::started(
+            s.user,
+            audit_command(s.command),
+            m.detail,
+            s.config_hash,
+            s.session_id,
+        )
+        .write_to(&self.log, &self.format);
         Decision::Continue
     }
 
@@ -22,7 +38,7 @@ impl Middleware for Audit {
         let event = match o {
             Outcome::Allowed { exit_code, detail } => AuditEvent::allowed(
                 s.user,
-                s.command,
+                audit_command(s.command),
                 detail,
                 *exit_code,
                 s.config_hash,
@@ -30,7 +46,7 @@ impl Middleware for Audit {
             ),
             Outcome::Denied { reason, failures } => AuditEvent::denied(
                 s.user,
-                s.command,
+                audit_command(s.command),
                 reason,
                 failures,
                 1,
@@ -109,6 +125,29 @@ mod tests {
         assert_eq!(contents.lines().count(), 1);
         assert!(contents.contains("\"denied\""));
         assert!(contents.contains("bad"));
+    }
+
+    #[test]
+    fn test_audit_maps_empty_command_to_marker() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let audit = Audit {
+            log: tmp.path().to_str().unwrap().into(),
+            format: AuditFormat::Json,
+        };
+
+        audit.on_outcome(
+            &session(""),
+            &Outcome::Allowed {
+                exit_code: 0,
+                detail: "show_help",
+            },
+        );
+
+        let contents = std::fs::read_to_string(tmp.path()).unwrap();
+        assert!(
+            contents.contains("(empty - help shown)"),
+            "empty command must map to the marker: {contents}"
+        );
     }
 
     #[test]
