@@ -53,6 +53,8 @@ fn run_with_chain(
     let effective_global = effective.global.clone();
     logging::init(&effective_global.log_tag)?;
 
+    // An unset variable means sshd did not invoke us as a forced command;
+    // there is no request to match or audit.
     let raw = std::env::var("SSH_ORIGINAL_COMMAND").map_err(|_| GuardError::NoCommand)?;
     let chain = chain_override.unwrap_or_else(|| middleware::default_chain(&effective_global));
     let session = middleware::Session {
@@ -82,7 +84,13 @@ fn run_with_chain(
         Decision::Continue => {}
     }
 
-    let args = shlex::split(&raw).ok_or_else(|| GuardError::ParseCommand(raw.clone()))?;
+    // A command that cannot be parsed is a denial, not a silent error: record
+    // it through the same outcome path as a match failure.
+    let Some(args) = shlex::split(&raw) else {
+        let reason = GuardError::ParseCommand(raw.clone()).to_string();
+        deny(&reason, &[]);
+        return Err(Box::new(GuardError::ParseCommand(raw)));
+    };
     let match_result = match engine::match_command(&effective, &args) {
         Ok(m) => m,
         Err(GuardError::NoMatch { failures, .. }) => {
@@ -309,6 +317,27 @@ action = {{ type = "show_help" }}
         assert!(
             contents.contains(&format!("\"user\":\"{}\"", current_user())),
             "audit must carry the resolved user: {contents}"
+        );
+    }
+
+    #[test]
+    fn test_run_audits_parse_failure() {
+        let audit = tempfile::NamedTempFile::new().unwrap();
+        let audit_path = audit.path().to_str().unwrap().to_string();
+        let cfg = write_run_rule_config(&audit_path);
+        let path = cfg.path().to_str().unwrap().to_string();
+
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true 'unterminated"), || {
+            let err = run(&path).expect_err("malformed command must fail");
+            assert!(err.to_string().contains("invalid command"), "got: {err}");
+        });
+
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        assert_eq!(contents.lines().count(), 1, "audit: {contents}");
+        assert!(contents.contains("\"denied\""), "audit: {contents}");
+        assert!(
+            !contents.contains("\"started\""),
+            "parse failure must not emit started: {contents}"
         );
     }
 
