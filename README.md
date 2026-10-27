@@ -20,6 +20,7 @@ and only runs the command if it matches an allowed rule.
 
 # Guides
 
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md): Developer guide to the code, extension points, and design invariants.
 - [MANUAL_SETUP.md](docs/MANUAL_SETUP.md): How to install and configure ssh-guard on any Linux distribution.
 - [NIXOS_SETUP.md](docs/NIXOS_SETUP.md): How to install and configure ssh-guard on NixOS.
 - [CONFIGURATION.md](docs/CONFIG.md): How to write rules and configure ssh-guard.
