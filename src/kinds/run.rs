@@ -35,7 +35,7 @@ impl RuleKind for Run<'_> {
             return;
         }
 
-        if !ctx.rule.implicit_symlinks {
+        if ctx.rule.implicit_symlinks {
             return;
         }
 
