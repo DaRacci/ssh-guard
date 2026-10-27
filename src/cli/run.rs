@@ -200,6 +200,32 @@ args = ["--exact", "kinds::run::tests::subprocess_helper_success"]
         cfg
     }
 
+    /// A config with `dry_run = true` and a `run` rule whose binary does not
+    /// exist: a dry run must skip execution rather than fail to spawn.
+    fn write_dry_run_config(audit_path: &str) -> tempfile::NamedTempFile {
+        let mut cfg = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            cfg,
+            r#"
+[global]
+audit_log = "{audit_path}"
+audit_format = "json"
+log_tag = "ssh-guard-test"
+help_text = "help"
+dry_run = true
+
+[[rules]]
+command = "true"
+
+[rules.action]
+type = "run"
+binary = "/nonexistent/dry-run-binary"
+"#
+        )
+        .unwrap();
+        cfg
+    }
+
     fn write_show_help_config(audit_path: &str) -> tempfile::NamedTempFile {
         let mut cfg = tempfile::NamedTempFile::new().unwrap();
         writeln!(
@@ -367,6 +393,28 @@ action = {{ type = "show_help" }}
         assert!(
             contents.contains(&format!("\"user\":\"{}\"", current_user())),
             "audit must carry the resolved user: {contents}"
+        );
+    }
+
+    #[test]
+    fn test_run_dry_run_skips_execution() {
+        let audit = tempfile::NamedTempFile::new().unwrap();
+        let audit_path = audit.path().to_str().unwrap().to_string();
+        let cfg = write_dry_run_config(&audit_path);
+        let path = cfg.path().to_str().unwrap().to_string();
+
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
+            let code = run(&path).expect("dry run must not attempt execution");
+            assert_eq!(code, 0);
+        });
+
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        assert_eq!(contents.lines().count(), 1, "audit: {contents}");
+        assert!(contents.contains("\"allowed\""), "audit: {contents}");
+        assert!(contents.contains("\"dry_run\""), "audit: {contents}");
+        assert!(
+            !contents.contains("\"started\""),
+            "dry run must not emit started: {contents}"
         );
     }
 

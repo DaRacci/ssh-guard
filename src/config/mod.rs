@@ -1117,6 +1117,7 @@ arg_style = "dos"
                 max_read_bytes: 999,
                 max_tail_lines: 111,
                 default_tail_lines: 50,
+                dry_run: false,
             },
             contracts: {
                 let mut c = Contracts::new();
@@ -1245,6 +1246,7 @@ action = { type = "show_help" }
                 max_read_bytes: 1024,
                 max_tail_lines: 100,
                 default_tail_lines: 20,
+                dry_run: false,
             },
             rules: vec![Rule {
                 action: Action::Run {
@@ -1305,6 +1307,7 @@ audit_log = "/dev/null"
                 max_read_bytes: 100,
                 max_tail_lines: 10,
                 default_tail_lines: 5,
+                dry_run: false,
             },
             ..Default::default()
         };

@@ -28,6 +28,9 @@ pub struct GlobalOverride {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_tail_lines: Option<usize>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
 }
 
 impl GlobalOverride {
@@ -50,6 +53,7 @@ impl GlobalOverride {
             max_read_bytes: self.max_read_bytes.unwrap_or(base.max_read_bytes),
             max_tail_lines: self.max_tail_lines.unwrap_or(base.max_tail_lines),
             default_tail_lines: self.default_tail_lines.unwrap_or(base.default_tail_lines),
+            dry_run: self.dry_run.unwrap_or(base.dry_run),
         }
     }
 }
@@ -115,6 +119,7 @@ mod tests {
             max_read_bytes: Some(999),
             max_tail_lines: Some(100),
             default_tail_lines: Some(10),
+            dry_run: Some(true),
         };
         let merged = ov.apply_to(&base);
         assert_eq!(merged.audit_log, "/custom/log");
@@ -124,6 +129,7 @@ mod tests {
         assert_eq!(merged.max_read_bytes, 999);
         assert_eq!(merged.max_tail_lines, 100);
         assert_eq!(merged.default_tail_lines, 10);
+        assert!(merged.dry_run);
     }
 
     #[test]

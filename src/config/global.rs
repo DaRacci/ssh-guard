@@ -31,6 +31,10 @@ pub struct Global {
     /// Default lines for `tail_file` when not specified.
     #[serde(default = "default_tail_lines_global")]
     pub default_tail_lines: usize,
+
+    /// When true, matched commands are reported but not executed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dry_run: bool,
 }
 
 fn default_audit_log() -> String {
@@ -53,6 +57,10 @@ const fn default_tail_lines_global() -> usize {
     200
 }
 
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl Default for Global {
     fn default() -> Self {
         Self {
@@ -63,6 +71,7 @@ impl Default for Global {
             max_read_bytes: default_max_read_bytes(),
             max_tail_lines: default_max_tail_lines(),
             default_tail_lines: default_tail_lines_global(),
+            dry_run: false,
         }
     }
 }

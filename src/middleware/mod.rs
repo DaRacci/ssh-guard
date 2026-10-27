@@ -1,14 +1,19 @@
 use crate::config::global::Global;
 
 pub(crate) mod audit;
+pub(crate) mod dry_run;
 pub(crate) mod help;
 
 /// Build the default middleware chain for the `run` path.
 ///
-/// Order matters: `Audit` is first so any later veto still has its outcome recorded,
-/// and `Help` handles the empty-command request before matching.
+/// Order matters: `DryRun` runs before `Audit` so a dry-run match is audited as
+/// allowed without a `started` record (nothing executes). `Audit` then records
+/// outcomes, and `Help` handles the empty-command request before matching.
 pub(crate) fn default_chain(global: &Global) -> Chain {
     Chain::new(vec![
+        Box::new(dry_run::DryRun {
+            enabled: global.dry_run,
+        }),
         Box::new(audit::Audit {
             log: global.audit_log.clone(),
             format: global.audit_format.clone(),
