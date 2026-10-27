@@ -66,7 +66,6 @@ fn test_full_config_round_trip_via_file() {
             },
         ],
         roots: vec!["/var/log".into()],
-        units: vec!["sshd.service".into()],
         ..Default::default()
     };
 

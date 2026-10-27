@@ -676,7 +676,6 @@ mod tests {
                 },
             ],
             roots: vec!["/var/log".into()],
-            units: vec!["sshd.service".into()],
             ..Default::default()
         }
     }

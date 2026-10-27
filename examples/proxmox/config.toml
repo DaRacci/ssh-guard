@@ -4,12 +4,6 @@ roots = [
   "/proc",
   "/sys",
 ]
-units = [
-  "pvedaemon.service",
-  "pve-cluster.service",
-  "pvestatd.service",
-  "sshd.service",
-]
 
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"

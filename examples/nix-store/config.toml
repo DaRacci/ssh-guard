@@ -3,7 +3,6 @@ roots = [
   "/nix/var/log/nix",
   "/etc/nix",
 ]
-units = ["nix-daemon.service"]
 
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"

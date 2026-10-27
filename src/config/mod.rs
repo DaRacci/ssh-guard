@@ -44,10 +44,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "RootSets::is_empty")]
     pub root_sets: RootSets,
 
-    /// Allowed systemd units.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub units: Vec<String>,
-
     /// Named profiles that extend the base config for specific SSH users.
     /// Key is profile name (any unique string).
     #[serde(default, skip_serializing_if = "Profiles::is_empty")]
@@ -165,7 +161,6 @@ impl Config {
     /// - `rules`: append profile rules after base rules.
     /// - `roots`: append unique values preserving base-first order.
     /// - `root_sets`: same-name sets append unique values preserving base-first order.
-    /// - `units`: append unique values preserving base-first order.
     /// - Unset profile sections leave base values intact.
     #[must_use]
     pub fn merge_profile(&self, profile: &Profile) -> Config {
@@ -197,10 +192,6 @@ impl Config {
 
         if let Some(ref profile_root_sets) = profile.root_sets {
             merge_root_sets(&mut merged.root_sets, profile_root_sets);
-        }
-
-        if let Some(ref pu) = profile.units {
-            append_unique(&mut merged.units, pu);
         }
 
         merged.profiles = Profiles::new();
@@ -1148,7 +1139,6 @@ arg_style = "dos"
                 subcommands: vec![],
             }],
             roots: vec!["/data".into()],
-            units: vec!["nginx".into(), "sshd".into()],
             ..Default::default()
         };
 
@@ -1176,21 +1166,18 @@ arg_style = "dos"
         assert_eq!(r.pre_args, vec!["--config", "/etc/test.conf"]);
 
         assert_eq!(deserialized.roots, vec!["/data"]);
-        assert_eq!(deserialized.units, vec!["nginx", "sshd"]);
     }
 
     #[test]
-    fn test_parse_roots_and_units() {
+    fn test_parse_roots() {
         let toml_str = r#"
 roots = ["/var/log", "/home"]
-units = ["nginx", "postgresql", "sshd"]
 
 [[rules]]
 action = { type = "show_help" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.roots, vec!["/var/log", "/home"]);
-        assert_eq!(cfg.units, vec!["nginx", "postgresql", "sshd"]);
     }
 
     #[test]
@@ -1961,29 +1948,6 @@ data = ["/srv/data"]
     }
 
     #[test]
-    fn test_merge_profile_units_append_unique() {
-        let base: Config = toml::from_str(
-            r#"
-units = ["nginx", "sshd"]
-[[rules]]
-action = { type = "show_help" }
-"#,
-        )
-        .unwrap();
-
-        let profile: Profile = toml::from_str(
-            r#"
-users = ["bob"]
-units = ["sshd", "httpd"]
-"#,
-        )
-        .unwrap();
-
-        let merged = base.merge_profile(&profile);
-        assert_eq!(merged.units, vec!["nginx", "sshd", "httpd"]);
-    }
-
-    #[test]
     fn test_check_duplicate_users_no_dups() {
         let cfg: Config = toml::from_str(
             r#"
@@ -2042,7 +2006,6 @@ users = ["bob", "charlie"]
                         rules: None,
                         roots: None,
                         root_sets: None,
-                        units: None,
                     },
                 );
                 p

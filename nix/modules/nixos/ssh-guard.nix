@@ -114,7 +114,6 @@ in
             log_tag = "ssh-guard";
           };
           roots = [ "/var/log" "/run" ];
-          units = [ "sshd" "nginx" ];
         }
       '';
     };

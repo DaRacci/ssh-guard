@@ -1,9 +1,3 @@
-units = [
-  "sshd.service",
-  "nginx.service",
-  "docker.service",
-]
-
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
 audit_format = "logfmt"

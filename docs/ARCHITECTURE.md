@@ -207,11 +207,11 @@ A middleware cannot:
 | `contracts`           | Named value validators                                                           |
 | `flag_groups`         | Reusable flag lists referenced by rules/subcommands.                             |
 | `roots` / `root_sets` | Allowed filesystem roots for path actions/contracts.                             |
-| `profiles`            | Per-SSH-user overlays of global, rules, contracts, roots, units.                 |
+| `profiles`            | Per-SSH-user overlays of global, rules, contracts, roots.                        |
 
 Profile merge (`Config::merge_profile`) is field-wise: globals override by
 explicit field, rules append, maps merge with the profile winning on
-conflicts, roots/units append unique.
+conflicts, roots append unique.
 
 ## Matching engine
 

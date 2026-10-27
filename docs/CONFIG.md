@@ -45,7 +45,6 @@ The config has these top-level sections:
 | `[[rules]]` | Allowed command rules. |
 | `roots` | Default allowed filesystem roots (the `roots` root set). |
 | `[root_sets]` | Additional named filesystem root sets for file actions. |
-| `units` | Allowed systemd units (informational; used by templates). |
 | `[profiles.<name>]` | Per-user overrides that extend the base config. |
 
 ---
@@ -293,7 +292,7 @@ Merge rules for profiles:
 - `global`: field-wise override; unspecified fields inherit base.
 - `contracts` / `flag_groups`: map merge; profile keys override same-name base keys.
 - `rules`: appended after base rules.
-- `roots` / `units`: appended, unique, base-first order.
+- `roots`: appended, unique, base-first order.
 - `root_sets`: same-name sets merge, paths appended unique, base-first order.
 - Profile-only root sets can be used by profile contracts and profile rules, but base rules/contracts must validate against the base config because they also apply when no profile matches.
 

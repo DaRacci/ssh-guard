@@ -97,10 +97,6 @@ pub struct Profile {
     /// Optional additional named root sets (same-name sets append unique, base-first order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_sets: Option<RootSets>,
-
-    /// Optional additional units (appended unique, base-first order).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units: Option<Vec<String>>,
 }
 
 #[cfg(test)]
