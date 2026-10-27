@@ -66,6 +66,8 @@ impl Chain {
     pub(crate) fn on_request(&self, s: &Session<'_>) -> Decision {
         for m in &self.middleware {
             if let Decision::Deny(r) = m.on_request(s) {
+                let name = m.name();
+                log::debug!("middleware '{name}' denied request");
                 return Decision::Deny(r);
             }
         }
@@ -76,6 +78,12 @@ impl Chain {
     pub(crate) fn on_match(&self, s: &Session<'_>, info: &MatchInfo<'_>) -> Decision {
         for m in &self.middleware {
             if let Decision::Deny(r) = m.on_match(s, info) {
+                let name = m.name();
+                let path = info.subcommand_path.join("/");
+                log::debug!(
+                    "middleware '{name}' denied rule[{}] via {path}",
+                    info.rule_index
+                );
                 return Decision::Deny(r);
             }
         }

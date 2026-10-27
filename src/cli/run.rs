@@ -82,6 +82,13 @@ fn run_with_chain(
         chain.on_outcome(&session, &middleware::Outcome::Denied { reason, failures });
     };
 
+    // Pre-match veto: a middleware may reject the request before any rule is
+    // consulted. Recorded as a denial, with no `started` event (nothing ran).
+    if let middleware::Decision::Deny(reason) = chain.on_request(&session) {
+        deny(&reason, &[]);
+        return Err(Box::new(GuardError::Denied(reason)));
+    }
+
     let match_result = match engine::match_command(&effective, &args) {
         Ok(m) => m,
         Err(GuardError::NoMatch { failures, .. }) => {
@@ -146,7 +153,9 @@ fn run_with_chain(
 #[cfg(test)]
 #[coverage(off)]
 mod tests {
-    use super::{current_user, run};
+    use super::{current_user, run, run_with_chain};
+    use crate::config::audit::AuditFormat;
+    use crate::middleware;
     use std::io::Write;
 
     /// Write a config with a single `run` rule whose `command` is `true` and
@@ -226,6 +235,51 @@ action = {{ type = "show_help" }}
         assert!(
             lines.next().unwrap().contains("\"allowed\""),
             "second event must be allowed: {contents}"
+        );
+    }
+
+    struct DenyOnRequest;
+
+    impl middleware::Middleware for DenyOnRequest {
+        fn name(&self) -> &'static str {
+            "deny_on_request"
+        }
+
+        fn on_request(&self, _s: &middleware::Session<'_>) -> middleware::Decision {
+            middleware::Decision::Deny("blocked".into())
+        }
+
+        fn on_outcome(&self, _s: &middleware::Session<'_>, _o: &middleware::Outcome<'_>) {}
+    }
+
+    #[test]
+    fn test_run_denies_on_request_veto() {
+        let audit = tempfile::NamedTempFile::new().unwrap();
+        let audit_path = audit.path().to_str().unwrap().to_string();
+        let cfg = write_run_rule_config(&audit_path);
+        let path = cfg.path().to_str().unwrap().to_string();
+
+        let chain = middleware::Chain::new(vec![
+            Box::new(middleware::audit::Audit {
+                log: audit_path.clone(),
+                format: AuditFormat::Json,
+            }),
+            Box::new(DenyOnRequest),
+        ]);
+
+        temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
+            let err = run_with_chain(&path, Some(chain))
+                .expect_err("on_request veto must deny")
+                .to_string();
+            assert!(err.contains("command denied: blocked"), "got: {err}");
+        });
+
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        assert_eq!(contents.lines().count(), 1, "audit: {contents}");
+        assert!(contents.contains("\"denied\""), "audit: {contents}");
+        assert!(
+            !contents.contains("\"started\""),
+            "on_request veto precedes matching, so no started event: {contents}"
         );
     }
 
