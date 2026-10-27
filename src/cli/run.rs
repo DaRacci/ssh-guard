@@ -29,6 +29,14 @@ fn current_os_user() -> Option<String> {
 }
 
 pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+    run_with_chain(config_path, None)
+}
+
+/// `None` uses the default chain.
+fn run_with_chain(
+    config_path: &str,
+    chain_override: Option<middleware::Chain>,
+) -> Result<i32, Box<dyn std::error::Error>> {
     let cfg = Config::from_file(config_path)?;
     let config_hash = Config::sha256(config_path)?;
     let session_id = crate::audit::new_session_id();
@@ -41,7 +49,7 @@ pub(crate) fn run(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> 
 
     let raw = std::env::var("SSH_ORIGINAL_COMMAND").map_err(|_| GuardError::NoCommand)?;
 
-    let chain = middleware::default_chain(&effective_global);
+    let chain = chain_override.unwrap_or_else(|| middleware::default_chain(&effective_global));
 
     if raw.trim().is_empty() {
         println!("{}", effective_global.help_text);
