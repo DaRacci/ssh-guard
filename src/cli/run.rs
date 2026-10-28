@@ -303,9 +303,10 @@ help_text = "test help shown"
         ]);
 
         temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
-            let err = run_with_chain(&path, Some(chain))
-                .expect_err("on_request veto must deny")
-                .to_string();
+            let Err(denied) = run_with_chain(&path, Some(chain)) else {
+                panic!("on_request veto must deny");
+            };
+            let err = denied.to_string();
             assert!(err.contains("command denied: blocked"), "got: {err}");
         });
 
@@ -350,7 +351,9 @@ help_text = "test help shown"
         let path = cfg.path().to_str().unwrap().to_string();
 
         temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true 'unterminated"), || {
-            let err = run(&path).expect_err("malformed command must fail");
+            let Err(err) = run(&path) else {
+                panic!("malformed command must fail");
+            };
             assert!(err.to_string().contains("invalid command"), "got: {err}");
         });
 
@@ -421,7 +424,9 @@ help_text = "test help shown"
         let path = cfg.path().to_str().unwrap().to_string();
 
         temp_env::with_var("SSH_ORIGINAL_COMMAND", Some("true"), || {
-            let code = run(&path).expect("dry run must not attempt execution");
+            let Ok(code) = run(&path) else {
+                panic!("dry run must not attempt execution");
+            };
             assert_eq!(code, 0);
         });
 

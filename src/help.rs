@@ -1183,8 +1183,12 @@ mod tests {
         config.root_sets.insert("zeta".into(), vec!["/z".into()]);
         config.root_sets.insert("alpha".into(), vec!["/a".into()]);
         let out = render_help(&config, &HelpOptions::default());
-        let alpha = out.find("\n  alpha:").expect("alpha set missing");
-        let zeta = out.find("\n  zeta:").expect("zeta set missing");
+        let Some(alpha) = out.find("\n  alpha:") else {
+            panic!("alpha set missing");
+        };
+        let Some(zeta) = out.find("\n  zeta:") else {
+            panic!("zeta set missing");
+        };
         assert!(alpha < zeta, "expected alpha before zeta, got: {out}");
     }
 
@@ -1296,10 +1300,12 @@ mod tests {
         };
 
         let out = render_help(&config, &HelpOptions::default());
-        let legend_idx = out.find("Legend:").expect("legend missing");
-        let commands_idx = out
-            .find("Allowed commands:")
-            .expect("allowed commands heading missing");
+        let Some(legend_idx) = out.find("Legend:") else {
+            panic!("legend missing");
+        };
+        let Some(commands_idx) = out.find("Allowed commands:") else {
+            panic!("allowed commands heading missing");
+        };
 
         assert!(legend_idx < commands_idx, "got: {out}");
         assert!(out.contains("Value details:"), "got: {out}");

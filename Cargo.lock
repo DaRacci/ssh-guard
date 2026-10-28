@@ -587,6 +587,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shlex",
+ "ssh-guard",
  "syslog",
  "temp-env",
  "tempfile",

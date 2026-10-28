@@ -57,6 +57,8 @@ const fn default_tail_lines_global() -> usize {
     200
 }
 
+// serde requires `fn(&bool) -> bool` for `skip_serializing_if`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 const fn is_false(value: &bool) -> bool {
     !*value
 }

@@ -1,5 +1,3 @@
-//! This module defines a Noop rule kind, primarily for testing purposes.
-
 pub(crate) mod list_dir;
 pub(crate) mod read_file;
 pub(crate) mod run;
@@ -88,12 +86,15 @@ pub(crate) fn kind_for(action: &Action) -> Box<dyn RuleKind + '_> {
             path_capture,
             root_set,
         }),
+        #[cfg(any(test, feature = "noop"))]
         Action::Noop => Box::new(Noop),
     }
 }
 
+#[cfg(any(test, feature = "noop"))]
 struct Noop;
 
+#[cfg(any(test, feature = "noop"))]
 impl RuleKind for Noop {
     fn name(&self) -> &'static str {
         "noop"

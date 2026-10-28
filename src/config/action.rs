@@ -47,6 +47,7 @@ pub enum Action {
     },
 
     /// Internal placeholder action for tests and fixture configs.
+    #[cfg(any(test, feature = "noop"))]
     #[doc(hidden)]
     Noop,
 }
