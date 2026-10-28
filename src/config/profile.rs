@@ -120,7 +120,7 @@ mod tests {
             max_tail_lines: Some(100),
             default_tail_lines: Some(10),
             dry_run: Some(true),
-            generated_help: Some(true),
+            generated_help: Some(false),
         };
         let merged = ov.apply_to(&base);
         assert_eq!(merged.audit_log, "/custom/log");
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(merged.max_tail_lines, 100);
         assert_eq!(merged.default_tail_lines, 10);
         assert!(merged.dry_run);
-        assert!(merged.generated_help);
+        assert!(!merged.generated_help);
     }
 
     #[test]
