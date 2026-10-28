@@ -829,3 +829,61 @@ fn test_rule_level_pre_args_template_substitution() {
         "expected missing-capture denial, got: {err}"
     );
 }
+
+/// Exercises the `run` wire path: an empty command prints generated help when
+/// `generated_help` is on, and nothing once it is disabled.
+#[test]
+fn test_run_empty_command_respects_generated_help_toggle() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit_path = dir.path().join("audit.log");
+
+    let write_config = |generated: bool| {
+        let path = dir.path().join(format!("config-{generated}.toml"));
+        std::fs::write(
+            &path,
+            format!(
+                "roots = [\"/etc/ssh-guard-secret-root\"]\n\n\
+                 [global]\n\
+                 audit_log = \"{}\"\n\
+                 log_tag = \"ssh-guard-test\"\n\
+                 generated_help = {generated}\n",
+                audit_path.display()
+            ),
+        )
+        .unwrap();
+        path
+    };
+
+    let run = |config: &std::path::Path| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_ssh-guard"))
+            .arg("run")
+            .arg("--config")
+            .arg(config)
+            .env("SSH_ORIGINAL_COMMAND", "")
+            .output()
+            .unwrap()
+    };
+
+    // Default: the generated listing is served over the wire.
+    let on = run(&write_config(true));
+    assert!(on.status.success(), "run must succeed: {on:?}");
+    let on_stdout = String::from_utf8_lossy(&on.stdout);
+    assert!(
+        on_stdout.contains("/etc/ssh-guard-secret-root"),
+        "generated help should list roots: {on_stdout}"
+    );
+
+    // Opted out: no policy detail reaches the wire.
+    let off = run(&write_config(false));
+    assert!(off.status.success(), "run must succeed: {off:?}");
+    let off_stdout = String::from_utf8_lossy(&off.stdout);
+    assert!(
+        !off_stdout.contains("Allowed commands:"),
+        "disabled generated help must not list rules: {off_stdout}"
+    );
+    assert!(
+        !off_stdout.contains("/etc/ssh-guard-secret-root"),
+        "disabled generated help must not leak configured roots: {off_stdout}"
+    );
+    assert!(off_stdout.trim().is_empty(), "got: {off_stdout}");
+}

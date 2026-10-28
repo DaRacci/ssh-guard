@@ -1097,6 +1097,24 @@ mod tests {
     }
 
     #[test]
+    fn test_resolved_help_empty_when_generated_help_disabled() {
+        let config = Config {
+            rules: vec![run_rule("systemctl", vec![], vec![])],
+            global: Global {
+                help_text: String::new(),
+                generated_help: false,
+                ..Global::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            resolved_help(&config).is_empty(),
+            "disabled generated help must resolve to nothing"
+        );
+    }
+
+    #[test]
     fn test_render_help_empty_rules_has_headers() {
         let config = Config::default();
         let out = render_help(&config, &HelpOptions::default());
