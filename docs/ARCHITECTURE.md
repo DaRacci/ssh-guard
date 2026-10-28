@@ -281,7 +281,10 @@ Tests live:
 ## Design invariants
 
 1. **Behaviour is determined by the config, not the build.** No Cargo features
-   gate kinds or middleware; the audit hash must identify behaviour.
+   gate kinds or middleware; the audit hash must identify behaviour. The one
+   exception is the test-only `noop` feature, which adds a do-nothing
+   placeholder action for fixture configs; it is never enabled in a release
+   build, so it can never be selected at runtime.
 1. **Dispatch is exhaustive.** Kinds use one `match`; there is no string→fn
    registry that could miss a variant at runtime.
 1. **Fail closed on execution, fail open on audit I/O.** If a check fails, do
