@@ -1,15 +1,4 @@
-roots = [
-  "/var/log",
-  "/etc",
-  "/proc",
-  "/sys",
-]
-units = [
-  "pvedaemon.service",
-  "pve-cluster.service",
-  "pvestatd.service",
-  "sshd.service",
-]
+roots = ["/var/log", "/etc", "/proc", "/sys"]
 
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
@@ -255,7 +244,16 @@ timeout = "30000ms"
 command = "lsblk"
 implicit_symlinks = true
 arg_style = "gnu_long"
-flags = ["-f", "-o={string}", "--output={string}", "-a", "--all", "-J", "--json", "--noheadings"]
+flags = [
+  "-f",
+  "-o={string}",
+  "--output={string}",
+  "-a",
+  "--all",
+  "-J",
+  "--json",
+  "--noheadings",
+]
 
 [rules.action]
 type = "run"
@@ -303,7 +301,14 @@ timeout = "15000ms"
 command = "lscpu"
 implicit_symlinks = true
 arg_style = "gnu_long"
-flags = ["-e={string}", "--extended={string}", "-p={string}", "--parse={string}", "-J", "--json"]
+flags = [
+  "-e={string}",
+  "--extended={string}",
+  "-p={string}",
+  "--parse={string}",
+  "-J",
+  "--json",
+]
 
 [rules.action]
 type = "run"
@@ -339,7 +344,16 @@ timeout = "5000ms"
 command = "dmesg"
 implicit_symlinks = true
 arg_style = "gnu_long"
-flags = ["-T", "--time-format=iso", "-l={string}", "--level={string}", "-n={log_lines}", "--tail={log_lines}", "--since={string}", "--human"]
+flags = [
+  "-T",
+  "--time-format=iso",
+  "-l={string}",
+  "--level={string}",
+  "-n={log_lines}",
+  "--tail={log_lines}",
+  "--since={string}",
+  "--human",
+]
 
 [rules.action]
 type = "run"
@@ -351,7 +365,22 @@ timeout = "10000ms"
 command = "ps"
 implicit_symlinks = true
 arg_style = "gnu_long"
-flags = ["aux", "-ef", "-e", "-f", "-u={string}", "--sort={string}", "-o={string}", "--no-headers", "-p={string}", "-C={string}", "-H", "--forest", "-w", "-ww"]
+flags = [
+  "aux",
+  "-ef",
+  "-e",
+  "-f",
+  "-u={string}",
+  "--sort={string}",
+  "-o={string}",
+  "--no-headers",
+  "-p={string}",
+  "-C={string}",
+  "-H",
+  "--forest",
+  "-w",
+  "-ww",
+]
 
 [rules.action]
 type = "run"
@@ -363,7 +392,21 @@ timeout = "10000ms"
 command = "ss"
 implicit_symlinks = true
 arg_style = "gnu_long"
-flags = ["-t", "-u", "-l", "-p", "-n", "-a", "-s", "-i", "-e", "-m", "-o", "-4", "-6"]
+flags = [
+  "-t",
+  "-u",
+  "-l",
+  "-p",
+  "-n",
+  "-a",
+  "-s",
+  "-i",
+  "-e",
+  "-m",
+  "-o",
+  "-4",
+  "-6",
+]
 
 [rules.action]
 type = "run"
@@ -451,14 +494,6 @@ args = ["{path:string}"]
 type = "list_dir"
 path_capture = "path"
 root_set = "roots"
-
-[[rules]]
-command = "help"
-implicit_symlinks = true
-arg_style = "gnu_long"
-
-[rules.action]
-type = "show_help"
 
 [[rules]]
 command = "pct"

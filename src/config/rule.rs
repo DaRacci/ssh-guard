@@ -8,7 +8,7 @@ pub struct Rule {
 
     /// The first token users must type to match this rule.
     /// For `Run` actions this defaults to the binary filename if unset.
-    /// Required for non-`Run` actions (`read_file`, `show_help`, etc.).
+    /// Required for non-`Run` actions (`read_file`, `list_dir`, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_command_name_non_run_no_command() {
         let rule = Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: None,
             implicit_symlinks: true,
             arg_style: ArgStyle::GnuLong,
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_command_name_non_run_with_command() {
         let rule = Rule {
-            action: Action::ShowHelp,
+            action: Action::Noop,
             command: Some("help".into()),
             implicit_symlinks: true,
             arg_style: ArgStyle::GnuLong,

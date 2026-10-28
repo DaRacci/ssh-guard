@@ -45,7 +45,6 @@ The config has these top-level sections:
 | `[[rules]]` | Allowed command rules. |
 | `roots` | Default allowed filesystem roots (the `roots` root set). |
 | `[root_sets]` | Additional named filesystem root sets for file actions. |
-| `units` | Allowed systemd units (informational; used by templates). |
 | `[profiles.<name>]` | Per-user overrides that extend the base config. |
 
 ---
@@ -56,11 +55,19 @@ The config has these top-level sections:
 | -------------------- | ------------------------------ | ----------------------------------------------- |
 | `audit_log` | `/var/log/ssh-guard-audit.log` | File all audit events are appended to. |
 | `audit_format` | `json` | `json` or `logfmt`. |
-| `help_text` | _(empty)_ | Shown when the SSH command is empty. |
+| `help_text` | _(empty)_ | Shown when the SSH command is empty or `help`. Generated help is used when empty. |
 | `log_tag` | `ssh-guard` | Syslog tag for non-audit logging. |
 | `max_read_bytes` | `1048576` | Max bytes a `read_file` action will output. |
 | `max_tail_lines` | `5000` | Hard cap on lines for `tail_file`. |
 | `default_tail_lines` | `200` | Default lines for `tail_file` when unspecified. |
+| `dry_run` | `false` | Report matched commands without executing them. |
+| `generated_help` | `true` | Serve generated help (derived from the rules) when `help_text` is empty. |
+
+> **`dry_run` audit shape:** a matched command under `dry_run` writes a single
+> `allowed` event with `detail = "dry_run"` and **no** `started` event, because
+> the command never runs.
+> Anything parsing the log as `started` then `allowed` must tolerate the short
+> form.
 
 ---
 
@@ -89,7 +96,11 @@ Each `[[rules]]` entry has:
 | `tail_file` | `path_capture`, `lines_capture`, `default_lines`, `root_set` | Tails a file. |
 | `stat_path` | `path_capture`, `root_set` | Prints path metadata. |
 | `list_dir` | `path_capture`, `root_set` | Lists a directory. |
-| `show_help` | — | Prints `help_text`. |
+
+`help` and an empty command are handled automatically by the middleware chain.
+They print `global.help_text`.
+When it is empty, generated help is printed unless [`generated_help`](#global-options) is disabled.
+See the [migration guide](MIGRATING.md) if an older config defined a `show_help` rule.
 
 `timeout` accepts strings like `"5s"`, `"5000ms"`, `"2m"`, `"1.5h"`, or a bare integer in milliseconds.
 The Default is set to `5000ms`.
@@ -290,10 +301,10 @@ args = ["{int}"]
 
 Merge rules for profiles:
 
-- `global`: field-wise override; unspecified fields inherit base.
+- `global`: field-wise override of any `[global]` key (including `dry_run`); unspecified fields inherit base.
 - `contracts` / `flag_groups`: map merge; profile keys override same-name base keys.
 - `rules`: appended after base rules.
-- `roots` / `units`: appended, unique, base-first order.
+- `roots`: appended, unique, base-first order.
 - `root_sets`: same-name sets merge, paths appended unique, base-first order.
 - Profile-only root sets can be used by profile contracts and profile rules, but base rules/contracts must validate against the base config because they also apply when no profile matches.
 

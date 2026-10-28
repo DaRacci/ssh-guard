@@ -1,9 +1,3 @@
-units = [
-  "sshd.service",
-  "nginx.service",
-  "docker.service",
-]
-
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
 audit_format = "logfmt"
@@ -75,11 +69,3 @@ flags = [
   "-b",
 ]
 args = ["{unit}.service"]
-
-[[rules]]
-command = "help"
-implicit_symlinks = true
-arg_style = "gnu_long"
-
-[rules.action]
-type = "show_help"

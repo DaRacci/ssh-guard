@@ -87,7 +87,6 @@ fn config_with_rules(rule_count: usize) -> Config {
         rules,
         roots: vec![],
         root_sets: HashMap::new(),
-        units: vec![],
         profiles: HashMap::new(),
     }
 }
@@ -123,7 +122,6 @@ fn enum_contract_config(enum_size: usize) -> (Config, Vec<String>) {
         )],
         roots: vec![],
         root_sets: HashMap::new(),
-        units: vec![],
         profiles: HashMap::new(),
     };
 
@@ -169,7 +167,6 @@ fn nested_config(depth: usize) -> (Config, Vec<String>) {
             rules: vec![rule],
             roots: vec![],
             root_sets: HashMap::new(),
-            units: vec![],
             profiles: HashMap::new(),
         },
         argv,
@@ -187,7 +184,7 @@ fn config_parse_fixture(rule_count: usize) -> String {
         );
     }
 
-    toml.push_str("[profiles.admin]\nusers = [\"bench-user\"]\nroots = [\"/srv/admin\"]\nunits = [\"sshd.service\"]\n\n");
+    toml.push_str("[profiles.admin]\nusers = [\"bench-user\"]\nroots = [\"/srv/admin\"]\n\n");
     toml.push_str("[profiles.admin.global]\nhelp_text = \"admin\"\n\n");
     toml.push_str("[profiles.admin.contracts.unit]\ntype = \"enum\"\nvalues = [\"sshd\", \"nginx\", \"postgres\"]\n\n");
 
@@ -254,10 +251,6 @@ fn resolve_profile_config(rule_count: usize) -> Config {
             vec!["{port}".to_string()],
         )]),
         roots: Some(vec!["/srv/profile".to_string(), "/srv/shared".to_string()]),
-        units: Some(vec![
-            "sshd.service".to_string(),
-            "nginx.service".to_string(),
-        ]),
         root_sets: None,
     };
 
@@ -271,7 +264,6 @@ fn resolve_profile_config(rule_count: usize) -> Config {
         rules,
         roots: vec!["/srv/base".to_string(), "/srv/shared".to_string()],
         root_sets: HashMap::new(),
-        units: vec!["base.service".to_string()],
         profiles,
     }
 }
@@ -309,7 +301,6 @@ mod matcher {
             rules: vec![complex_pattern_rule(pattern_count)],
             roots: vec![],
             root_sets: HashMap::new(),
-            units: vec![],
             profiles: HashMap::new(),
         };
         let argv = vec!["bench".to_string(), "--match=42".to_string()];
@@ -343,7 +334,6 @@ mod matcher {
             )],
             roots: vec![],
             root_sets: HashMap::new(),
-            units: vec![],
             profiles: HashMap::new(),
         };
         let argv = ambiguous_backtracking_argv(pair_count);
@@ -376,11 +366,7 @@ mod config {
             let resolved = config
                 .resolve_for_user(divan::black_box("bench-user"))
                 .unwrap();
-            divan::black_box((
-                resolved.rules.len(),
-                resolved.roots.len(),
-                resolved.units.len(),
-            ))
+            divan::black_box((resolved.rules.len(), resolved.roots.len()))
         });
     }
 }

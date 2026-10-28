@@ -22,6 +22,23 @@ pub type RootSets = HashMap<String, Vec<String>>;
 
 pub(crate) const DEFAULT_ROOT_SET: &str = "roots";
 
+/// Render a TOML parse error, attaching a migration hint for removed keys.
+///
+/// A stale `show_help` action fails to parse; without the hint a `ForceCommand`
+/// host just sees an opaque serde message and every SSH command fails.
+fn toml_error_message(err: &toml::de::Error) -> String {
+    let message = err.to_string();
+    if message.contains("unknown variant `show_help`") {
+        return format!(
+            "{message}\n\
+             hint: the `show_help` action was removed - \
+             `help` and an empty command are handled automatically. \
+             See docs/MIGRATING.md, \"From 0.3\"."
+        );
+    }
+    message
+}
+
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
@@ -44,10 +61,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "RootSets::is_empty")]
     pub root_sets: RootSets,
 
-    /// Allowed systemd units.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub units: Vec<String>,
-
     /// Named profiles that extend the base config for specific SSH users.
     /// Key is profile name (any unique string).
     #[serde(default, skip_serializing_if = "Profiles::is_empty")]
@@ -64,7 +77,7 @@ impl Config {
         let data = std::fs::read_to_string(path).map_err(|e| {
             crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
         })?;
-        toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
+        toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(toml_error_message(&e)))
     }
 
     #[must_use]
@@ -165,7 +178,6 @@ impl Config {
     /// - `rules`: append profile rules after base rules.
     /// - `roots`: append unique values preserving base-first order.
     /// - `root_sets`: same-name sets append unique values preserving base-first order.
-    /// - `units`: append unique values preserving base-first order.
     /// - Unset profile sections leave base values intact.
     #[must_use]
     pub fn merge_profile(&self, profile: &Profile) -> Config {
@@ -197,10 +209,6 @@ impl Config {
 
         if let Some(ref profile_root_sets) = profile.root_sets {
             merge_root_sets(&mut merged.root_sets, profile_root_sets);
-        }
-
-        if let Some(ref pu) = profile.units {
-            append_unique(&mut merged.units, pu);
         }
 
         merged.profiles = Profiles::new();
@@ -462,38 +470,11 @@ fn validate_action_captures(
     capture_paths: &[CapturePath],
     errors: &mut Vec<String>,
 ) {
-    let mut references: Vec<(&str, &str)> = match &rule.action {
-        Action::ReadFile {
-            path_capture,
-            root_set,
-        }
-        | Action::StatPath {
-            path_capture,
-            root_set,
-        }
-        | Action::ListDir {
-            path_capture,
-            root_set,
-        } => {
-            validate_root_set(root_set, available_root_sets, index, scope, errors);
-            vec![("path_capture", path_capture.as_str())]
-        }
-        Action::TailFile {
-            path_capture,
-            lines_capture,
-            root_set,
-            ..
-        } => {
-            validate_root_set(root_set, available_root_sets, index, scope, errors);
-            let mut refs = vec![("path_capture", path_capture.as_str())];
-            if let Some(lines_capture) = lines_capture {
-                refs.push(("lines_capture", lines_capture.as_str()));
-            }
-            refs
-        }
-        Action::Run { .. } | Action::ShowHelp => return,
-    };
-    references.shrink_to_fit();
+    let kind = crate::kinds::kind_for(&rule.action);
+    for root_set in kind.root_sets() {
+        validate_root_set(root_set, available_root_sets, index, scope, errors);
+    }
+    let references = kind.capture_refs();
 
     for (field, reference) in references {
         let name = reference
@@ -801,6 +782,7 @@ fn validate_rules(
 }
 
 #[cfg(test)]
+#[coverage(off)]
 mod tests {
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
@@ -851,7 +833,7 @@ mod tests {
     fn test_parse_minimal_config() {
         let toml_str = r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.rules.len(), 1);
@@ -965,7 +947,7 @@ max_tail_lines = 1000
 default_tail_lines = 50
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.global.audit_log, "/custom/audit.log");
@@ -995,7 +977,7 @@ min = 3
 max = 32
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.contracts.len(), 3);
@@ -1037,12 +1019,9 @@ action = { type = "stat_path", path_capture = "{path}", root_set = "files" }
 
 [[rules]]
 action = { type = "list_dir", path_capture = "{dir}", root_set = "files" }
-
-[[rules]]
-action = { type = "show_help" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.rules.len(), 6);
+        assert_eq!(cfg.rules.len(), 5);
         assert_eq!(tail_default_lines(&cfg.rules[2].action), Some(50));
     }
 
@@ -1143,6 +1122,8 @@ arg_style = "dos"
                 max_read_bytes: 999,
                 max_tail_lines: 111,
                 default_tail_lines: 50,
+                dry_run: false,
+                generated_help: false,
             },
             contracts: {
                 let mut c = Contracts::new();
@@ -1173,7 +1154,6 @@ arg_style = "dos"
                 subcommands: vec![],
             }],
             roots: vec!["/data".into()],
-            units: vec!["nginx".into(), "sshd".into()],
             ..Default::default()
         };
 
@@ -1201,21 +1181,18 @@ arg_style = "dos"
         assert_eq!(r.pre_args, vec!["--config", "/etc/test.conf"]);
 
         assert_eq!(deserialized.roots, vec!["/data"]);
-        assert_eq!(deserialized.units, vec!["nginx", "sshd"]);
     }
 
     #[test]
-    fn test_parse_roots_and_units() {
+    fn test_parse_roots() {
         let toml_str = r#"
 roots = ["/var/log", "/home"]
-units = ["nginx", "postgresql", "sshd"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.roots, vec!["/var/log", "/home"]);
-        assert_eq!(cfg.units, vec!["nginx", "postgresql", "sshd"]);
     }
 
     #[test]
@@ -1228,7 +1205,7 @@ data = ["/srv/data", "/srv/shared"]
 logs = ["/srv/log/app"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         let value: toml::Value = toml::from_str(&cfg.to_toml_string().unwrap()).unwrap();
@@ -1248,6 +1225,24 @@ action = { type = "show_help" }
             value["root_sets"]["logs"].as_array().unwrap(),
             &vec![toml::Value::String("/srv/log/app".into())]
         );
+    }
+
+    #[test]
+    fn test_from_file_show_help_hints_migration() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"[[rules]]
+action = {{ type = "show_help" }}
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let err = Config::from_file(&path).unwrap_err().to_string();
+        assert!(err.contains("unknown variant `show_help`"), "{err}");
+        assert!(err.contains("MIGRATING.md"), "{err}");
     }
 
     #[test]
@@ -1271,6 +1266,8 @@ action = { type = "show_help" }
                 max_read_bytes: 1024,
                 max_tail_lines: 100,
                 default_tail_lines: 20,
+                dry_run: false,
+                generated_help: false,
             },
             rules: vec![Rule {
                 action: Action::Run {
@@ -1331,6 +1328,8 @@ audit_log = "/dev/null"
                 max_read_bytes: 100,
                 max_tail_lines: 10,
                 default_tail_lines: 5,
+                dry_run: false,
+                generated_help: false,
             },
             ..Default::default()
         };
@@ -1406,7 +1405,7 @@ args = ["{string}"]
     fn test_parse_config_with_profiles() {
         let toml_str = r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]
@@ -1497,7 +1496,7 @@ captured = ["--path={missing_contract}"]
 
 [[rules]]
 command = "inspect"
-action = { type = "show_help" }
+action = { type = "noop" }
 flag_groups = ["captured"]
 "#,
         )
@@ -1549,6 +1548,24 @@ args = ["{user:string}"]
     }
 
     #[test]
+    fn test_validate_tail_file_lines_capture_ref_checked() {
+        let toml_str = r#"
+[[rules]]
+command = "logs"
+args = ["{path:string}"]
+action = { type = "tail_file", path_capture = "path", lines_capture = "n", root_set = "roots" }
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        let errors = cfg.validation_errors();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("lines_capture") && e.contains("'n'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn test_validate_semantics_allows_subcommand_only_capture_for_action_args() {
         let cfg: Config = toml::from_str(
             r#"
@@ -1575,7 +1592,7 @@ args = ["{user:string}"]
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1648,7 +1665,7 @@ roots = ["/srv/data"]
 
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1662,7 +1679,7 @@ action = { type = "show_help" }
             r#"
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1687,7 +1704,7 @@ args = ["{file:string}"]
             r#"
 [[rules]]
 command = "help"
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1742,7 +1759,7 @@ action = { type = "run", binary = "/opt/test/bin/systemctl", args = [] }
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1763,7 +1780,7 @@ audit_log = "/base/log"
 help_text = "base help"
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1780,7 +1797,7 @@ action = { type = "run", binary = "/opt/test/bin/admintool", args = [] }
         assert_eq!(resolved.global.audit_log, "/admin/log");
         assert_eq!(resolved.global.help_text, "base help");
         assert_eq!(resolved.rules.len(), 2);
-        assert!(matches!(resolved.rules[0].action, Action::ShowHelp));
+        assert!(matches!(resolved.rules[0].action, Action::Noop));
         assert!(matches!(resolved.rules[1].action, Action::Run { .. }));
         assert!(resolved.profiles.is_empty());
     }
@@ -1790,7 +1807,7 @@ action = { type = "run", binary = "/opt/test/bin/admintool", args = [] }
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice"]
@@ -1815,7 +1832,7 @@ users = ["alice"]
 audit_log = "/base/log"
 help_text = "base help"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1840,7 +1857,7 @@ audit_log = "/admin/log"
         let base: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1867,7 +1884,7 @@ action = { type = "show_help" }
 
         let merged = base.merge_profile(&profile);
         assert_eq!(merged.rules.len(), 2);
-        assert!(matches!(merged.rules[0].action, Action::ShowHelp));
+        assert!(matches!(merged.rules[0].action, Action::Noop));
         assert_eq!(merged.rules[1].command_name(), Some("tool"));
     }
 
@@ -1881,7 +1898,7 @@ min = 1024
 max = 65535
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1908,7 +1925,7 @@ max = 9999
             r#"
 roots = ["/base", "/common"]
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1933,7 +1950,7 @@ roots = ["/common", "/profile"]
 logs = ["/base/log", "/shared"]
 
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 "#,
         )
         .unwrap();
@@ -1966,34 +1983,11 @@ data = ["/srv/data"]
     }
 
     #[test]
-    fn test_merge_profile_units_append_unique() {
-        let base: Config = toml::from_str(
-            r#"
-units = ["nginx", "sshd"]
-[[rules]]
-action = { type = "show_help" }
-"#,
-        )
-        .unwrap();
-
-        let profile: Profile = toml::from_str(
-            r#"
-users = ["bob"]
-units = ["sshd", "httpd"]
-"#,
-        )
-        .unwrap();
-
-        let merged = base.merge_profile(&profile);
-        assert_eq!(merged.units, vec!["nginx", "sshd", "httpd"]);
-    }
-
-    #[test]
     fn test_check_duplicate_users_no_dups() {
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]
@@ -2011,7 +2005,7 @@ users = ["charlie"]
         let cfg: Config = toml::from_str(
             r#"
 [[rules]]
-action = { type = "show_help" }
+action = { type = "noop" }
 
 [profiles.admin]
 users = ["alice", "bob"]
@@ -2047,7 +2041,6 @@ users = ["bob", "charlie"]
                         rules: None,
                         roots: None,
                         root_sets: None,
-                        units: None,
                     },
                 );
                 p

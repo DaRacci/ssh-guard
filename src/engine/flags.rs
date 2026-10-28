@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn test_effective_style_sub_no_override() {
         let rule = Rule {
-            action: crate::config::action::Action::ShowHelp,
+            action: crate::config::action::Action::Noop,
             command: Some("t".into()),
             args: vec![],
             pre_args: vec![],
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn test_effective_style_sub_with_override() {
         let rule = Rule {
-            action: crate::config::action::Action::ShowHelp,
+            action: crate::config::action::Action::Noop,
             command: Some("t".into()),
             args: vec![],
             pre_args: vec![],
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn test_effective_style_no_sub() {
         let rule = Rule {
-            action: crate::config::action::Action::ShowHelp,
+            action: crate::config::action::Action::Noop,
             command: Some("t".into()),
             args: vec![],
             pre_args: vec![],

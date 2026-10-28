@@ -1,9 +1,4 @@
-roots = [
-  "/nix/store",
-  "/nix/var/log/nix",
-  "/etc/nix",
-]
-units = ["nix-daemon.service"]
+roots = ["/nix/store", "/nix/var/log/nix", "/etc/nix"]
 
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
@@ -115,14 +110,6 @@ path_capture = "path"
 lines_capture = "lines"
 default_lines = 200
 root_set = "roots"
-
-[[rules]]
-command = "help"
-implicit_symlinks = true
-arg_style = "gnu_long"
-
-[rules.action]
-type = "show_help"
 
 [profiles.builder]
 users = ["builder"]

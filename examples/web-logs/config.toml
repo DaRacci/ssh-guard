@@ -1,14 +1,7 @@
-roots = [
-  "/var/log/nginx",
-  "/srv/app/log",
-  "/etc/nginx",
-]
+roots = ["/var/log/nginx", "/srv/app/log", "/etc/nginx"]
 
 [root_sets]
-app = [
-  "/srv/app/releases",
-  "/srv/app/current",
-]
+app = ["/srv/app/releases", "/srv/app/current"]
 
 [global]
 audit_log = "/var/log/ssh-guard-audit.log"
@@ -135,14 +128,6 @@ timeout = "10000ms"
 name = "-u"
 flags = ["-n={lines}", "--lines={lines}", "--no-pager", "-q"]
 args = ["nginx.service"]
-
-[[rules]]
-command = "help"
-implicit_symlinks = true
-arg_style = "gnu_long"
-
-[rules.action]
-type = "show_help"
 
 [profiles.deploy]
 users = ["deploy"]

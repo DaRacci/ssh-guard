@@ -54,7 +54,7 @@ pub fn help(
         colour: resolve_colour(colour),
     };
 
-    print!("{}", render_help(&effective, &opts));
+    println!("{}", render_help(&effective, &opts));
     Ok(0)
 }
 

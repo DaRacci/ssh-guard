@@ -15,7 +15,7 @@ This is smallest realistic service-debugging template. It shows:
 
 - enum contracts for fixed unit list
 - reusable flag groups
-- `show_help` rule
+- automatic `help` handling
 - moderate command surface without file access
 
 ## Account expectations

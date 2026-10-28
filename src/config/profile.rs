@@ -28,6 +28,12 @@ pub struct GlobalOverride {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_tail_lines: Option<usize>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_help: Option<bool>,
 }
 
 impl GlobalOverride {
@@ -50,6 +56,8 @@ impl GlobalOverride {
             max_read_bytes: self.max_read_bytes.unwrap_or(base.max_read_bytes),
             max_tail_lines: self.max_tail_lines.unwrap_or(base.max_tail_lines),
             default_tail_lines: self.default_tail_lines.unwrap_or(base.default_tail_lines),
+            dry_run: self.dry_run.unwrap_or(base.dry_run),
+            generated_help: self.generated_help.unwrap_or(base.generated_help),
         }
     }
 }
@@ -63,7 +71,7 @@ impl GlobalOverride {
 /// [profiles.admin.global]
 /// audit_log = "/var/log/admin-audit.log"
 /// [[profiles.admin.rules]]
-/// action = { type = "show_help" }
+/// action = { type = "run", binary = "/bin/ls" }
 /// ```
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Profile {
@@ -93,10 +101,6 @@ pub struct Profile {
     /// Optional additional named root sets (same-name sets append unique, base-first order).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_sets: Option<RootSets>,
-
-    /// Optional additional units (appended unique, base-first order).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub units: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -115,6 +119,8 @@ mod tests {
             max_read_bytes: Some(999),
             max_tail_lines: Some(100),
             default_tail_lines: Some(10),
+            dry_run: Some(true),
+            generated_help: Some(false),
         };
         let merged = ov.apply_to(&base);
         assert_eq!(merged.audit_log, "/custom/log");
@@ -124,6 +130,8 @@ mod tests {
         assert_eq!(merged.max_read_bytes, 999);
         assert_eq!(merged.max_tail_lines, 100);
         assert_eq!(merged.default_tail_lines, 10);
+        assert!(merged.dry_run);
+        assert!(!merged.generated_help);
     }
 
     #[test]

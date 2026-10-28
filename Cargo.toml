@@ -1,14 +1,26 @@
 [package]
 name = "ssh-guard"
 description = "Guard your SSH server with dynamic scoped rules, and audit logging."
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 readme = "README.md"
 repository = "https://codeberg.org/Racci/ssh-guard"
 include = ["src/**", "tests/**", "supply-chain/**", "LICENSE"]
-categories = ["security", "network-programming", "command-line-utilities", "command-line-utilities", "config"]
+categories = [
+  "security",
+  "network-programming",
+  "command-line-utilities",
+  "command-line-utilities",
+  "config",
+]
 keywords = ["ssh", "audit", "guard", "privilege", "server"]
+
+[features]
+# Test-only placeholder action (`Action::Noop`). The `tests/` crates enable it in
+# dev-dependency builds to write fixture configs; a release build never does, so
+# it cannot be selected at runtime.
+noop = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -27,6 +39,7 @@ nix = { version = "0.31.3", default-features = false, features = [
 sha2 = "0.11"
 
 [dev-dependencies]
+ssh-guard = { path = ".", features = ["noop"] }
 tempfile = "3"
 temp-env = "0.3"
 divan = "0.1"

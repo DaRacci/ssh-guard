@@ -3,7 +3,6 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::config::DEFAULT_ROOT_SET;
-use crate::config::action::Action;
 use crate::config::contract::Contract;
 use crate::config::rule::Rule;
 use crate::config::subcommand::Subcommand;
@@ -166,7 +165,7 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     lines.push(String::new());
 
     for rule in &config.rules {
-        if matches!(rule.action, Action::ShowHelp) {
+        if !crate::kinds::kind_for(&rule.action).visible_in_help() {
             continue;
         }
 
@@ -177,8 +176,24 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     }
 
     lines.extend(render_roots(config, opts));
-    lines.push(String::new());
     lines.join("\n")
+}
+
+/// Help text shown to a connecting user for an empty command or `help`.
+///
+/// `help_text` is returned verbatim when set.
+/// Otherwise returns generated help when `generated_help` is on, or an empty string when it is off.
+pub(crate) fn resolved_help(config: &Config) -> String {
+    let text = &config.global.help_text;
+    if !text.trim().is_empty() {
+        return text.clone();
+    }
+
+    if config.global.generated_help {
+        return render_help(config, &HelpOptions::default());
+    }
+
+    String::new()
 }
 
 /// Filesystem root sets that bound file/path actions, rendered when any are set;
@@ -430,9 +445,10 @@ fn collect_value_details(config: &Config, opts: &HelpOptions) -> Vec<ValueDetail
     let mut details = Vec::new();
 
     for rule in &config.rules {
-        if matches!(rule.action, Action::ShowHelp) {
+        if !crate::kinds::kind_for(&rule.action).visible_in_help() {
             continue;
         }
+
         let flags = expand_flags(&config.flag_groups, &rule.flag_groups, &rule.flags);
         collect_details_for_tokens(&flags, true, &config.contracts, opts, &mut details);
         collect_details_for_tokens(&rule.args, false, &config.contracts, opts, &mut details);
@@ -570,6 +586,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::action::Action;
     use crate::config::arg::ArgStyle;
+    use crate::config::global::Global;
     use crate::config::rule::Rule;
     use crate::config::subcommand::Subcommand;
 
@@ -1027,12 +1044,12 @@ mod tests {
     }
 
     #[test]
-    fn test_render_help_skips_show_help_line() {
+    fn test_render_help_skips_hidden_rule() {
         let config = Config {
             rules: vec![
                 run_rule("systemctl", vec![], vec![]),
                 Rule {
-                    action: Action::ShowHelp,
+                    action: Action::Noop,
                     command: Some("help".into()),
                     implicit_symlinks: true,
                     arg_style: ArgStyle::GnuLong,
@@ -1050,7 +1067,50 @@ mod tests {
         assert!(out.lines().any(|line| line == "systemctl"), "got: {out}");
         assert!(
             !out.lines().any(|line| line.trim() == "help"),
-            "show_help rule should be skipped, got: {out}"
+            "hidden rule should be skipped, got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_resolved_help_prefers_configured_text() {
+        let config = Config {
+            global: Global {
+                help_text: "custom help\n".into(),
+                ..Global::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(resolved_help(&config), "custom help\n");
+    }
+
+    #[test]
+    fn test_resolved_help_generates_when_help_text_empty() {
+        let config = Config {
+            rules: vec![run_rule("systemctl", vec![], vec![])],
+            ..Default::default()
+        };
+
+        let out = resolved_help(&config);
+        assert!(out.contains("Allowed commands:"), "got: {out}");
+        assert!(out.contains("systemctl"), "got: {out}");
+    }
+
+    #[test]
+    fn test_resolved_help_empty_when_generated_help_disabled() {
+        let config = Config {
+            rules: vec![run_rule("systemctl", vec![], vec![])],
+            global: Global {
+                help_text: String::new(),
+                generated_help: false,
+                ..Global::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            resolved_help(&config).is_empty(),
+            "disabled generated help must resolve to nothing"
         );
     }
 
@@ -1148,8 +1208,12 @@ mod tests {
         config.root_sets.insert("zeta".into(), vec!["/z".into()]);
         config.root_sets.insert("alpha".into(), vec!["/a".into()]);
         let out = render_help(&config, &HelpOptions::default());
-        let alpha = out.find("\n  alpha:").expect("alpha set missing");
-        let zeta = out.find("\n  zeta:").expect("zeta set missing");
+        let Some(alpha) = out.find("\n  alpha:") else {
+            panic!("alpha set missing");
+        };
+        let Some(zeta) = out.find("\n  zeta:") else {
+            panic!("zeta set missing");
+        };
         assert!(alpha < zeta, "expected alpha before zeta, got: {out}");
     }
 
@@ -1261,10 +1325,12 @@ mod tests {
         };
 
         let out = render_help(&config, &HelpOptions::default());
-        let legend_idx = out.find("Legend:").expect("legend missing");
-        let commands_idx = out
-            .find("Allowed commands:")
-            .expect("allowed commands heading missing");
+        let Some(legend_idx) = out.find("Legend:") else {
+            panic!("legend missing");
+        };
+        let Some(commands_idx) = out.find("Allowed commands:") else {
+            panic!("allowed commands heading missing");
+        };
 
         assert!(legend_idx < commands_idx, "got: {out}");
         assert!(out.contains("Value details:"), "got: {out}");

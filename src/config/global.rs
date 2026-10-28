@@ -31,6 +31,14 @@ pub struct Global {
     /// Default lines for `tail_file` when not specified.
     #[serde(default = "default_tail_lines_global")]
     pub default_tail_lines: usize,
+
+    /// When true, matched commands are reported but not executed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dry_run: bool,
+
+    /// When true, an empty command or `help` prints generated help if `help_text` is empty.
+    #[serde(default = "default_generated_help", skip_serializing_if = "is_true")]
+    pub generated_help: bool,
 }
 
 fn default_audit_log() -> String {
@@ -53,6 +61,22 @@ const fn default_tail_lines_global() -> usize {
     200
 }
 
+const fn default_generated_help() -> bool {
+    true
+}
+
+// serde requires `fn(&bool) -> bool` for `skip_serializing_if`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+// serde requires `fn(&bool) -> bool` for `skip_serializing_if`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_true(value: &bool) -> bool {
+    *value
+}
+
 impl Default for Global {
     fn default() -> Self {
         Self {
@@ -63,6 +87,8 @@ impl Default for Global {
             max_read_bytes: default_max_read_bytes(),
             max_tail_lines: default_max_tail_lines(),
             default_tail_lines: default_tail_lines_global(),
+            dry_run: false,
+            generated_help: default_generated_help(),
         }
     }
 }
