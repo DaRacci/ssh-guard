@@ -62,10 +62,6 @@ fn action_tail_file(
 }
 
 impl RuleKind for TailFile<'_> {
-    fn name(&self) -> &'static str {
-        "tail_file"
-    }
-
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
         let mut refs = vec![("path_capture", self.path_capture)];
         if let Some(lines_capture) = self.lines_capture {

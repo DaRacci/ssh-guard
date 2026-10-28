@@ -103,7 +103,6 @@ Behaviour lives in `src/kinds/`, and the two are joined by one exhaustive functi
 
 ```rust
 pub(crate) trait RuleKind: Sync {
-    fn name(&self) -> &'static str;                       // serde tag
     fn capture_refs(&self) -> Vec<(&'static str, &str)>;  // config validation
     fn root_sets(&self) -> Vec<&str>;                     // config validation
     fn visible_in_help(&self) -> bool;                    // generated help

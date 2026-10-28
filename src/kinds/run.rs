@@ -17,10 +17,6 @@ pub(super) struct Run<'a> {
 }
 
 impl RuleKind for Run<'_> {
-    fn name(&self) -> &'static str {
-        "run"
-    }
-
     fn validate_env(&self, ctx: &EnvCtx<'_>, errors: &mut Vec<String>) {
         let path = Path::new(self.binary);
         if !path.is_absolute() {

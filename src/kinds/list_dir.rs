@@ -35,10 +35,6 @@ fn action_list_dir(
 }
 
 impl RuleKind for ListDir<'_> {
-    fn name(&self) -> &'static str {
-        "list_dir"
-    }
-
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
         vec![("path_capture", self.path_capture)]
     }

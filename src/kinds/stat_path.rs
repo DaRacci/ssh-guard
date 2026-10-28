@@ -38,10 +38,6 @@ fn action_stat_path(
 }
 
 impl RuleKind for StatPath<'_> {
-    fn name(&self) -> &'static str {
-        "stat_path"
-    }
-
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
         vec![("path_capture", self.path_capture)]
     }

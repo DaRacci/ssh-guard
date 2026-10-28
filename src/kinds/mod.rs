@@ -27,9 +27,6 @@ pub(crate) struct EnvCtx<'a> {
 }
 
 pub(crate) trait RuleKind: Sync {
-    #[allow(dead_code)]
-    fn name(&self) -> &'static str;
-
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
         Vec::new()
     }
@@ -96,10 +93,6 @@ struct Noop;
 
 #[cfg(any(test, feature = "noop"))]
 impl RuleKind for Noop {
-    fn name(&self) -> &'static str {
-        "noop"
-    }
-
     fn visible_in_help(&self) -> bool {
         false
     }
@@ -122,19 +115,6 @@ mod tests {
             args: vec![],
             timeout: Duration::default(),
         }
-    }
-
-    #[test]
-    fn test_kind_for_reports_serde_name() {
-        assert_eq!(kind_for(&run_action()).name(), "run");
-        assert_eq!(
-            kind_for(&Action::ReadFile {
-                path_capture: "p".into(),
-                root_set: "roots".into(),
-            })
-            .name(),
-            "read_file"
-        );
     }
 
     #[test]

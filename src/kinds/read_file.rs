@@ -35,10 +35,6 @@ fn action_read_file(
 }
 
 impl RuleKind for ReadFile<'_> {
-    fn name(&self) -> &'static str {
-        "read_file"
-    }
-
     fn capture_refs(&self) -> Vec<(&'static str, &str)> {
         vec![("path_capture", self.path_capture)]
     }
