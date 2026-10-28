@@ -1081,7 +1081,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(resolved_help(&config), "custom help");
+        assert_eq!(resolved_help(&config), "custom help\n");
     }
 
     #[test]
