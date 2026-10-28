@@ -8,8 +8,22 @@ Config paths, rule matching, and actions are covered in [CONFIG.md](CONFIG.md).
 
 ## From 0.3
 
-Two config keys accepted up to 0.3.0 were removed in 0.4.0.
-The parser warns about neither, so update existing configs after upgrading.
+Two config keys accepted up to 0.3.0 were removed in 0.4.0, and one default
+changed. The parser warns about none of them, so update existing configs after
+upgrading.
+
+### Generated help is served by default
+
+Up to 0.3.0, an empty command or `help` printed `help_text` and nothing else.
+
+In 0.4.0, when `help_text` is empty the guard prints generated help instead.
+That listing enumerates contract `enum` values, integer ranges, and the paths in
+every configured root set. `generated_help` defaults to `true`, so upgrading
+exposes the listing to any connecting user without any further action.
+
+Set `generated_help = false` to print only `help_text` (an empty line when unset,
+as before), or write a curated listing into `help_text`.
+See [SECURITY.md](SECURITY.md#generated-help-can-disclose-policy).
 
 ### `show_help` action removed
 
