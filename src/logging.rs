@@ -20,22 +20,25 @@ pub fn init(tag: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Prefer the local syslog socket, but do not treat its absence as fatal.
     // sshd ForceCommand environments always have /dev/log, yet containers and test harnesses may not.
     // Fall back to stderr so the guard stays usable and observable wherever it runs.
-    match syslog::unix(formatter.clone()) {
-        Ok(logger) => {
-            // A pre-existing logger, leave it alone.
-            let _ = log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)));
-        }
+    let installed = match syslog::unix(formatter) {
+        Ok(logger) => log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger))).is_ok(),
         Err(syslog_err) => {
             let logger = StderrLogger {
                 tag: tag.to_string(),
             };
-            if log::set_boxed_logger(Box::new(logger)).is_ok() {
+            let installed = log::set_boxed_logger(Box::new(logger)).is_ok();
+            if installed {
                 eprintln!("ssh-guard: syslog unavailable ({syslog_err}); logging to stderr");
             }
+            installed
         }
-    }
+    };
 
-    log::set_max_level(LevelFilter::Info);
+    // Only set the level when we installed the logger.
+    // A pre-existing logger owns its own level, so leave it as-is.
+    if installed {
+        log::set_max_level(LevelFilter::Info);
+    }
     Ok(())
 }
 
