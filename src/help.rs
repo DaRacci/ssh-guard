@@ -181,8 +181,8 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
 
 /// Configured `help_text`, or generated help when it is empty.
 pub(crate) fn resolved_help(config: &Config) -> String {
-    let text = config.global.help_text.trim();
-    if text.is_empty() {
+    let text = &config.global.help_text;
+    if text.trim().is_empty() {
         render_help(config, &HelpOptions::default())
     } else {
         text.to_string()
