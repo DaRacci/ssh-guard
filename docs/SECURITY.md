@@ -59,6 +59,14 @@ sudo chattr +a /var/log/ssh-guard-audit.log    # set append-only attribute
 > **Why `+a`:** the append-only attribute protects integrity.
 > Existing entries can't be modified, truncated, or deleted, and the file can't be renamed or removed.
 
+## Generated help can disclose policy
+
+An empty command or a raw `help` prints `global.help_text` when it is set.
+When it is unset, generated help is printed by default, which enumerates placeholder details: contract `enum` values, integer ranges, and the paths in every configured root set.
+An authenticated but restricted user can read that listing.
+
+Set `generated_help = false` when the rules hold anything you would rather not disclose, or write a curated listing into `help_text`.
+
 ## Profile selection trusts `USER`
 
 ssh-guard picks the effective profile from the `USER` environment variable.

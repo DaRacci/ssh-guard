@@ -179,14 +179,21 @@ pub fn render_help(config: &Config, opts: &HelpOptions) -> String {
     lines.join("\n")
 }
 
-/// Configured `help_text`, or generated help when it is empty.
+/// Help text shown to a connecting user for an empty command or `help`.
+///
+/// `help_text` is returned verbatim when set.
+/// Otherwise returns generated help when `generated_help` is on, or an empty string when it is off.
 pub(crate) fn resolved_help(config: &Config) -> String {
     let text = &config.global.help_text;
-    if text.trim().is_empty() {
-        render_help(config, &HelpOptions::default())
-    } else {
-        text.to_string()
+    if !text.trim().is_empty() {
+        return text.clone();
     }
+
+    if config.global.generated_help {
+        return render_help(config, &HelpOptions::default());
+    }
+
+    String::new()
 }
 
 /// Filesystem root sets that bound file/path actions, rendered when any are set;

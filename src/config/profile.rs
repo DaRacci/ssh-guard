@@ -31,6 +31,9 @@ pub struct GlobalOverride {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_help: Option<bool>,
 }
 
 impl GlobalOverride {
@@ -54,6 +57,7 @@ impl GlobalOverride {
             max_tail_lines: self.max_tail_lines.unwrap_or(base.max_tail_lines),
             default_tail_lines: self.default_tail_lines.unwrap_or(base.default_tail_lines),
             dry_run: self.dry_run.unwrap_or(base.dry_run),
+            generated_help: self.generated_help.unwrap_or(base.generated_help),
         }
     }
 }
@@ -116,6 +120,7 @@ mod tests {
             max_tail_lines: Some(100),
             default_tail_lines: Some(10),
             dry_run: Some(true),
+            generated_help: Some(true),
         };
         let merged = ov.apply_to(&base);
         assert_eq!(merged.audit_log, "/custom/log");
@@ -126,6 +131,7 @@ mod tests {
         assert_eq!(merged.max_tail_lines, 100);
         assert_eq!(merged.default_tail_lines, 10);
         assert!(merged.dry_run);
+        assert!(merged.generated_help);
     }
 
     #[test]
