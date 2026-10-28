@@ -33,25 +33,25 @@ flowchart TD
 
 ## Module map
 
-| Path                   | Responsibility                                                                                                                  |
+| Path | Responsibility |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.rs`          | Binary entry. Calls `cli::run()`, logs fatal errors to syslog, sets exit code.                                                  |
-| `src/lib.rs`           | Crate root. Declares modules and the strict lint profile.                                                                       |
-| `src/cli/mod.rs`       | `clap` CLI: `run`, `add-rule`, `validate`, `help`; config-path resolution.                                                      |
-| `src/cli/run.rs`       | The SSH runtime path: builds the session, drives the middleware chain.                                                          |
-| `src/cli/validate.rs`  | `validate` subcommand: config semantics + per-kind environment checks.                                                          |
-| `src/cli/merge.rs`     | `add-rule` subcommand: resolve a binary and merge a rule into config.                                                           |
-| `src/cli/help.rs`      | `help` subcommand: render generated help, colour handling.                                                                      |
-| `src/config/`          | Serde model (`Config`, `Global`, `Rule`, `Action`, `Subcommand`, `Contract`, `Profile`, …), loading, profile merge, validation. |
-| `src/engine/`          | Command matching: template/flag parsing, argv matching, contract validation → `MatchResult`.                                    |
-| `src/kinds/`           | **Layer 1.** `RuleKind` trait, `kind_for()` registry, one module per action kind, shared helpers.                               |
-| `src/middleware/`      | **Layer 2.** `Middleware`, `Chain`, `Decision`, `Session`, `MatchInfo`, `Outcome`, default chain.                               |
-| `src/actions.rs`       | Thin public shim: `execute()` dispatches through the kind registry; test seam for argv building.                                |
-| `src/audit.rs`         | `AuditEvent` / `AuditResult`, JSON and logfmt writers, timestamps, session ids.                                                 |
-| `src/help.rs`          | Shared help rendering and printing: generated `ssh-guard help` output and the configured `help_text`.                           |
-| `src/logging.rs`       | Syslog (or stderr fallback) logger init; idempotent for repeated `run()` calls.                                                 |
-| `src/path_security.rs` | Canonicalisation + "is this path inside an allowed root" checks.                                                                |
-| `src/errors.rs`        | `GuardError` and `MatchFailure`.                                                                                                |
+| `src/main.rs` | Binary entry. Calls `cli::run()`, logs fatal errors to syslog, sets exit code. |
+| `src/lib.rs` | Crate root. Declares modules and the strict lint profile. |
+| `src/cli/mod.rs` | `clap` CLI: `run`, `add-rule`, `validate`, `help`; config-path resolution. |
+| `src/cli/run.rs` | The SSH runtime path: builds the session, drives the middleware chain. |
+| `src/cli/validate.rs` | `validate` subcommand: config semantics + per-kind environment checks. |
+| `src/cli/merge.rs` | `add-rule` subcommand: resolve a binary and merge a rule into config. |
+| `src/cli/help.rs` | `help` subcommand: render generated help, colour handling. |
+| `src/config/` | Serde model (`Config`, `Global`, `Rule`, `Action`, `Subcommand`, `Contract`, `Profile`, …), loading, profile merge, validation. |
+| `src/engine/` | Command matching: template/flag parsing, argv matching, contract validation → `MatchResult`. |
+| `src/kinds/` | **Layer 1.** `RuleKind` trait, `kind_for()` registry, one module per action kind, shared helpers. |
+| `src/middleware/` | **Layer 2.** `Middleware`, `Chain`, `Decision`, `Session`, `MatchInfo`, `Outcome`, default chain. |
+| `src/actions.rs` | Thin public shim: `execute()` dispatches through the kind registry; test seam for argv building. |
+| `src/audit.rs` | `AuditEvent` / `AuditResult`, JSON and logfmt writers, timestamps, session ids. |
+| `src/help.rs` | Shared help rendering and printing: generated `ssh-guard help` output and the configured `help_text`. |
+| `src/logging.rs` | Syslog (or stderr fallback) logger init; idempotent for repeated `run()` calls. |
+| `src/path_security.rs` | Canonicalisation + "is this path inside an allowed root" checks. |
+| `src/errors.rs` | `GuardError` and `MatchFailure`. |
 
 ## The `run` lifecycle
 
@@ -154,10 +154,10 @@ pub(crate) trait Middleware: Sync {
 
 `Decision` has three outcomes:
 
-| Value                           | Meaning                                                                                      |
+| Value | Meaning |
 | ------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Continue`                      | Pass to the next middleware.                                                                 |
-| `Deny(reason)`                  | Veto the request/match. Audited as denied; returns `GuardError::Denied`.                     |
+| `Continue` | Pass to the next middleware. |
+| `Deny(reason)` | Veto the request/match. Audited as denied; returns `GuardError::Denied`. |
 | `Handled { exit_code, detail }` | The middleware handled it; short-circuit with `exit_code`. Audited as allowed with `detail`. |
 
 Semantics:
@@ -199,14 +199,14 @@ A middleware cannot:
 
 `Config` (`src/config/mod.rs`) is the root of the TOML:
 
-| Field                 | Purpose                                                                          |
+| Field | Purpose |
 | --------------------- | -------------------------------------------------------------------------------- |
-| `global`              | Audit log/format, help text, log tag, size limits, `dry_run`.                    |
-| `rules`               | Ordered rule tree. First match wins.                                             |
-| `contracts`           | Named value validators                                                           |
-| `flag_groups`         | Reusable flag lists referenced by rules/subcommands.                             |
-| `roots` / `root_sets` | Allowed filesystem roots for path actions/contracts.                             |
-| `profiles`            | Per-SSH-user overlays of global, rules, contracts, roots.                        |
+| `global` | Audit log/format, help text, log tag, size limits, `dry_run`. |
+| `rules` | Ordered rule tree. First match wins. |
+| `contracts` | Named value validators |
+| `flag_groups` | Reusable flag lists referenced by rules/subcommands. |
+| `roots` / `root_sets` | Allowed filesystem roots for path actions/contracts. |
+| `profiles` | Per-SSH-user overlays of global, rules, contracts, roots. |
 
 Profile merge (`Config::merge_profile`) is field-wise: globals override by
 explicit field, rules append, maps merge with the profile winning on
@@ -243,12 +243,12 @@ pub fn execute(config, rule, subcommand_path, captures, user_argv) -> Result<i32
 
 ## Validation layers
 
-| Layer           | Runs when                                         | Checks                                                                                      |
+| Layer | Runs when | Checks |
 | --------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Deserialisation | `Config::from_file`                               | TOML shape, types, required fields                                                          |
-| Semantics       | `Config::validation_errors` (validate CLI, tests) | unknown flag groups/contracts/root sets, unresolvable capture refs, duplicate profile users |
-| Environment     | `ssh-guard validate` → `RuleKind::validate_env`   | binaries exist, absolute paths, symlink policy                                              |
-| Runtime         | `run` → kind `execute`                            | captures present, roots enforced, operations fail closed                                    |
+| Deserialisation | `Config::from_file` | TOML shape, types, required fields |
+| Semantics | `Config::validation_errors` (validate CLI, tests) | unknown flag groups/contracts/root sets, unresolvable capture refs, duplicate profile users |
+| Environment | `ssh-guard validate` → `RuleKind::validate_env` | binaries exist, absolute paths, symlink policy |
+| Runtime | `run` → kind `execute` | captures present, roots enforced, operations fail closed |
 
 ## Errors and exit codes
 
@@ -283,10 +283,10 @@ Tests live:
 
 1. **Behaviour is determined by the config, not the build.** No Cargo features
    gate kinds or middleware; the audit hash must identify behaviour.
-2. **Dispatch is exhaustive.** Kinds use one `match`; there is no string→fn
+1. **Dispatch is exhaustive.** Kinds use one `match`; there is no string→fn
    registry that could miss a variant at runtime.
-3. **Fail closed on execution, fail open on audit I/O.** If a check fails, do
+1. **Fail closed on execution, fail open on audit I/O.** If a check fails, do
    not run the command. If the log is unwritable, keep serving.
-4. **Middleware observes, vetoes, or handles — never mutates.**
-5. **The config hash is the audit anchor.** Anything that changes behaviour
+1. **Middleware observes, vetoes, or handles — never mutates.**
+1. **The config hash is the audit anchor.** Anything that changes behaviour
    must change the config or the binary version, not hidden state.

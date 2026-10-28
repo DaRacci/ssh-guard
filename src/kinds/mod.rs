@@ -7,9 +7,9 @@ pub(crate) mod tail_file;
 
 use std::collections::HashMap;
 
+use crate::config::Config;
 use crate::config::action::Action;
 use crate::config::rule::Rule;
-use crate::config::Config;
 use crate::errors::GuardError;
 
 pub(crate) struct ExecCtx<'a> {

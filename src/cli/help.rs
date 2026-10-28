@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 
 use crate::config::Config;
-use crate::help::{render_help, HelpOptions};
+use crate::help::{HelpOptions, render_help};
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq)]
 pub enum ColourChoice {
