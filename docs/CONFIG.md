@@ -91,6 +91,7 @@ Each `[[rules]]` entry has:
 
 `help` and an empty command are handled automatically by the middleware chain.
 They print `global.help_text`, or generated help when `help_text` is empty.
+See the [migration guide](MIGRATING.md) if an older config defined a `show_help` rule.
 
 `timeout` accepts strings like `"5s"`, `"5000ms"`, `"2m"`, `"1.5h"`, or a bare integer in milliseconds.
 The Default is set to `5000ms`.

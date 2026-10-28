@@ -22,6 +22,23 @@ pub type RootSets = HashMap<String, Vec<String>>;
 
 pub(crate) const DEFAULT_ROOT_SET: &str = "roots";
 
+/// Render a TOML parse error, attaching a migration hint for removed keys.
+///
+/// A stale `show_help` action fails to parse; without the hint a `ForceCommand`
+/// host just sees an opaque serde message and every SSH command fails.
+fn toml_error_message(err: &toml::de::Error) -> String {
+    let message = err.to_string();
+    if message.contains("unknown variant `show_help`") {
+        return format!(
+            "{message}\n\
+             hint: the `show_help` action was removed - \
+             `help` and an empty command are handled automatically. \
+             See docs/MIGRATING.md, \"From 0.3\"."
+        );
+    }
+    message
+}
+
 #[derive(Default, Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
@@ -60,7 +77,7 @@ impl Config {
         let data = std::fs::read_to_string(path).map_err(|e| {
             crate::errors::GuardError::Config(format!("cannot read config file: {e}"))
         })?;
-        toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(e.to_string()))
+        toml::from_str(&data).map_err(|e| crate::errors::GuardError::Toml(toml_error_message(&e)))
     }
 
     #[must_use]
@@ -1207,6 +1224,24 @@ action = { type = "noop" }
             value["root_sets"]["logs"].as_array().unwrap(),
             &vec![toml::Value::String("/srv/log/app".into())]
         );
+    }
+
+    #[test]
+    fn test_from_file_show_help_hints_migration() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"[[rules]]
+action = {{ type = "show_help" }}
+"#
+        )
+        .unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let err = Config::from_file(&path).unwrap_err().to_string();
+        assert!(err.contains("unknown variant `show_help`"), "{err}");
+        assert!(err.contains("MIGRATING.md"), "{err}");
     }
 
     #[test]

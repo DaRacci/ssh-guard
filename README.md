@@ -25,6 +25,7 @@ and only runs the command if it matches an allowed rule.
 - [MANUAL_SETUP.md](docs/MANUAL_SETUP.md): How to install and configure ssh-guard on any Linux distribution.
 - [NIXOS_SETUP.md](docs/NIXOS_SETUP.md): How to install and configure ssh-guard on NixOS.
 - [CONFIGURATION.md](docs/CONFIG.md): How to write rules and configure ssh-guard.
+- [MIGRATING.md](docs/MIGRATING.md): Breaking config changes between releases and how to update an existing config.
 - [SECURITY.md](docs/SECURITY.md): Security considerations for deploying ssh-guard.
 - [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): Common problems and how to fix them.
 - [examples/README.md](examples/README.md): Example configs for Proxmox, systemd, web logs, PostgreSQL, and Nix hosts.
