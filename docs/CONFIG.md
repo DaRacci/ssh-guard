@@ -60,6 +60,13 @@ The config has these top-level sections:
 | `max_read_bytes` | `1048576` | Max bytes a `read_file` action will output. |
 | `max_tail_lines` | `5000` | Hard cap on lines for `tail_file`. |
 | `default_tail_lines` | `200` | Default lines for `tail_file` when unspecified. |
+| `dry_run` | `false` | Report matched commands without executing them. |
+
+> **`dry_run` audit shape:** a matched command under `dry_run` writes a single
+> `allowed` event with `detail = "dry_run"` and **no** `started` event, because
+> the command never runs.
+> Anything parsing the log as `started` then `allowed` must tolerate the short
+> form.
 
 ---
 
@@ -292,7 +299,7 @@ args = ["{int}"]
 
 Merge rules for profiles:
 
-- `global`: field-wise override; unspecified fields inherit base.
+- `global`: field-wise override of any `[global]` key (including `dry_run`); unspecified fields inherit base.
 - `contracts` / `flag_groups`: map merge; profile keys override same-name base keys.
 - `rules`: appended after base rules.
 - `roots`: appended, unique, base-first order.
